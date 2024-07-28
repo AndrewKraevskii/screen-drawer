@@ -1,7 +1,13 @@
 const std = @import("std");
 const rl = @import("raylib");
 
+const self_name = "screen-drawer";
+
 pub fn main() !void {
+    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    const gpa = gpa_impl.allocator();
+    _ = gpa; // autofix
+
     rl.setConfigFlags(.{
         .window_topmost = true,
         .window_transparent = true,
@@ -15,6 +21,7 @@ pub fn main() !void {
     const height = rl.getScreenHeight();
     std.log.info("screen size {d}x{d}", .{ width, height });
 
+    const picture_name = "drawing.png";
     const line_thickness = 4;
     const wheel_target_size = 100;
     var color_wheel: ColorWheel = .{ .center = rl.Vector2.zero(), .size = 0 };
@@ -24,11 +31,26 @@ pub fn main() !void {
         drawing_straght_line: rl.Vector2,
         picking_color,
     } = .idle;
-    // _ = drawing_start; // autofix
-    // var old_position: ?rl.Vector2 = null;
-    // var start_of_horisontal: ?rl.Vector2 = null;
     var color: rl.Color = rl.Color.red;
+
     const canvas = rl.loadRenderTexture(width, height);
+
+    if (loadCanvas(picture_name)) |texture| {
+        canvas.begin();
+        defer canvas.end();
+        rl.drawTextureRec(texture, .{
+            .x = 0,
+            .y = 0,
+            .width = @as(f32, @floatFromInt(texture.width)),
+            .height = -@as(f32, @floatFromInt(texture.height)), // negative to flip image verticaly
+        }, rl.Vector2.zero(), rl.Color.white);
+    } else |e| switch (e) {
+        error.FileNotFound => {
+            std.log.info("no old images saves", .{});
+        },
+        else => return e,
+    }
+
     defer canvas.unload();
 
     while (!rl.windowShouldClose() and rl.isWindowFocused()) {
@@ -44,8 +66,9 @@ pub fn main() !void {
             .x = 0,
             .y = 0,
             .width = @as(f32, @floatFromInt(canvas.texture.width)),
-            .height = -@as(f32, @floatFromInt(canvas.texture.height)),
+            .height = -@as(f32, @floatFromInt(canvas.texture.height)), // negative to flip image verticaly
         }, rl.Vector2.zero(), rl.Color.white);
+
         drawing_state = switch (drawing_state) {
             .idle => if (rl.isMouseButtonDown(.mouse_button_left))
                 .{ .drawing_line = current_pos }
@@ -91,10 +114,58 @@ pub fn main() !void {
             _ = drawColorWheel(color_wheel.center, current_pos, color_wheel.size);
         }
 
+        if (rl.isKeyDown(.key_left_control) and rl.isKeyPressed(.key_s)) {
+            try exportCanvas(canvas.texture, picture_name);
+        }
+
+        if (rl.isKeyPressed(.key_c)) {
+            canvas.begin();
+            rl.clearBackground(rl.Color.blank);
+            canvas.end();
+        }
         rl.drawCircleV(current_pos, line_thickness * 2, color);
 
         rl.endDrawing();
     }
+}
+
+fn exportCanvas(texture: rl.Texture, name: []const u8) !void {
+    var buffer: [std.fs.max_path_bytes * 2]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buffer);
+    const alloc = fba.allocator();
+
+    const data_dir_path = try getAppDataDirEnsurePathExist(alloc, self_name);
+    const picture_path = try std.fs.path.joinZ(alloc, &.{ data_dir_path, name });
+
+    const screenshot = rl.loadImageFromTexture(texture);
+
+    if (rl.exportImage(screenshot, picture_path))
+        std.log.info("Written image to {s}", .{picture_path})
+    else
+        std.log.err("Failed to write {s}", .{picture_path});
+}
+
+fn loadCanvas(name: []const u8) !rl.Texture {
+    var buffer: [std.fs.max_path_bytes * 2]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buffer);
+    const alloc = fba.allocator();
+
+    const data_dir_path = try getAppDataDirEnsurePathExist(alloc, self_name);
+    const picture_path = try std.fs.path.joinZ(alloc, &.{ data_dir_path, name });
+
+    const image = rl.loadImage(picture_path);
+    defer image.unload();
+    return rl.Texture.fromImage(image);
+}
+
+pub fn getAppDataDirEnsurePathExist(alloc: std.mem.Allocator, appname: []const u8) ![]u8 {
+    const data_dir_path = try std.fs.getAppDataDir(alloc, appname);
+
+    std.fs.makeDirAbsolute(data_dir_path) catch |e| switch (e) {
+        error.PathAlreadyExists => {},
+        else => |err| return err,
+    };
+    return data_dir_path;
 }
 
 const ColorWheel = struct {
