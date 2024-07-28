@@ -23,6 +23,9 @@ const key_bindings = struct {
     }
 };
 
+/// Set to std.math.inf(f32) to disable animations.
+const animation_speed = 10;
+
 pub fn main() !void {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_impl.deinit();
@@ -122,13 +125,13 @@ pub fn main() !void {
                 break :res if (!isDown(key_bindings.picking_color))
                     .idle
                 else {
-                    color_wheel.size = expDecay(color_wheel.size, wheel_target_size, 10, rl.getFrameTime());
+                    color_wheel.size = expDecay(color_wheel.size, wheel_target_size, animation_speed, rl.getFrameTime());
                     break :res .picking_color;
                 };
             },
         };
         if (drawing_state != .picking_color) {
-            color_wheel.size = expDecay(color_wheel.size, 0, 10, rl.getFrameTime());
+            color_wheel.size = expDecay(color_wheel.size, 0, animation_speed, rl.getFrameTime());
             _ = drawColorWheel(color_wheel.center, current_pos, color_wheel.size);
         }
 
