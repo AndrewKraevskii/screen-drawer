@@ -3,6 +3,26 @@ const rl = @import("raylib");
 
 const self_name = "screen-drawer";
 
+const key_bindings = struct {
+    // zig fmt: off
+    pub const draw          = .{ rl.MouseButton.mouse_button_left };
+    pub const draw_line     = .{ rl.MouseButton.mouse_button_right };
+    pub const picking_color = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
+    pub const save          = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_s };
+    pub const clear         = .{ rl.KeyboardKey.key_c };
+    // zig fmt: on
+
+    comptime {
+        for (@typeInfo(@This()).Struct.decls) |decl| {
+            for (@field(key_bindings, decl.name), 0..) |key, index| {
+                if (@TypeOf(key) == rl.MouseButton or @TypeOf(key) == rl.KeyboardKey) continue;
+                @compileError("Key bindings should include rl.MouseButton or rl.KeyboardKey found: " ++
+                    @typeName(@TypeOf(key)) ++ std.fmt.comptimePrint(" on position {d} in", .{index}) ++ decl.name);
+            }
+        }
+    }
+};
+
 pub fn main() !void {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_impl.deinit();
@@ -28,11 +48,12 @@ pub fn main() !void {
     const picture_name = "drawing.png";
     const line_thickness = 4;
     const wheel_target_size = 100;
+
     var color_wheel: ColorWheel = .{ .center = rl.Vector2.zero(), .size = 0 };
     var drawing_state: union(enum) {
         idle,
+        drawing: rl.Vector2,
         drawing_line: rl.Vector2,
-        drawing_straght_line: rl.Vector2,
         picking_color,
     } = .idle;
     var color: rl.Color = rl.Color.red;
@@ -59,10 +80,6 @@ pub fn main() !void {
         rl.beginDrawing();
         rl.clearBackground(rl.Color.blank);
 
-        if (isNextButtonPressed()) {
-            color = getColorHash(color);
-        }
-
         const current_pos = rl.getMousePosition();
         rl.drawTextureRec(canvas.texture, .{
             .x = 0,
@@ -72,27 +89,27 @@ pub fn main() !void {
         }, rl.Vector2.zero(), rl.Color.white);
 
         drawing_state = switch (drawing_state) {
-            .idle => if (rl.isMouseButtonDown(.mouse_button_left))
+            .idle => if (isDown(key_bindings.draw))
+                .{ .drawing = current_pos }
+            else if (isDown(key_bindings.draw_line))
                 .{ .drawing_line = current_pos }
-            else if (rl.isMouseButtonDown(.mouse_button_right))
-                .{ .drawing_straght_line = current_pos }
-            else if (isNextButtonPressed()) res: {
+            else if (isDown(key_bindings.picking_color)) res: {
                 color_wheel = .{ .center = current_pos, .size = 0 };
                 break :res .picking_color;
             } else .idle,
 
-            .drawing_line => |old_position| res: {
+            .drawing => |old_position| res: {
                 canvas.begin();
                 rl.drawLineEx(old_position, current_pos, line_thickness, color);
                 canvas.end();
-                break :res if (rl.isMouseButtonDown(.mouse_button_left))
-                    .{ .drawing_line = current_pos }
+                break :res if (isDown(key_bindings.draw))
+                    .{ .drawing = current_pos }
                 else
                     .idle;
             },
-            .drawing_straght_line => |old_position| res: {
+            .drawing_line => |old_position| res: {
                 drawNiceLine(old_position, current_pos, line_thickness, color);
-                if (rl.isMouseButtonReleased(.mouse_button_right)) {
+                if (!isDown(key_bindings.draw_line)) {
                     canvas.begin();
                     drawNiceLine(old_position, current_pos, line_thickness, color);
                     canvas.end();
@@ -102,7 +119,7 @@ pub fn main() !void {
             },
             .picking_color => res: {
                 color = drawColorWheel(color_wheel.center, current_pos, color_wheel.size);
-                break :res if (isNextButtonPressed())
+                break :res if (!isDown(key_bindings.picking_color))
                     .idle
                 else {
                     color_wheel.size = expDecay(color_wheel.size, wheel_target_size, 10, rl.getFrameTime());
@@ -116,7 +133,7 @@ pub fn main() !void {
         }
 
         const saving_now = !not_saving.isSet();
-        if (rl.isKeyDown(.key_left_control) and rl.isKeyPressed(.key_s) and !saving_now) {
+        if (isDown(key_bindings.save) and !saving_now) {
             not_saving.reset();
             try exportCanvas(gpa, canvas.texture, picture_name, &not_saving);
         }
@@ -125,7 +142,7 @@ pub fn main() !void {
             rl.drawCircle(30, 30, 20, rl.Color.red);
         }
 
-        if (rl.isKeyPressed(.key_c)) {
+        if (isDown(key_bindings.clear)) {
             canvas.begin();
             rl.clearBackground(rl.Color.blank);
             canvas.end();
@@ -154,9 +171,7 @@ fn exportCanvas(alloc: std.mem.Allocator, texture: rl.Texture, name: []const u8,
         .stack_size = 1024 * 1024,
     }, struct {
         pub fn foo(_alloc: std.mem.Allocator, image: rl.Image, path: [:0]const u8, cond: *std.Thread.ResetEvent) void {
-            // var size: i32 = undefined;
             const buff = rl.exportImage(image, path);
-            // std.log.info("exported image to memory", .{});
             if (buff)
                 std.log.info("Written image to {s}", .{path})
             else
@@ -214,10 +229,6 @@ fn projectToClosestLine(start: rl.Vector2, end: rl.Vector2) rl.Vector2 {
     return if (start.subtract(horisontal).lengthSqr() > start.subtract(vertical).lengthSqr()) horisontal else vertical;
 }
 
-fn isNextButtonPressed() bool {
-    return rl.isKeyDown(.key_left_control) and rl.isKeyPressed(.key_equal);
-}
-
 fn getColorHash(value: anytype) rl.Color {
     const hash = std.hash.Fnv1a_32.hash(std.mem.asBytes(&value));
     const color: rl.Color = @bitCast(hash);
@@ -246,4 +257,35 @@ fn drawColorWheel(center: rl.Vector2, pos: rl.Vector2, radius: f32) rl.Color {
 
 fn expDecay(a: anytype, b: @TypeOf(a), lambda: @TypeOf(a), dt: @TypeOf(a)) @TypeOf(a) {
     return std.math.lerp(a, b, 1 - @exp(-lambda * dt));
+}
+
+fn isDown(keys_or_buttons: anytype) bool {
+    inline for (keys_or_buttons) |key_or_button| {
+        switch (@TypeOf(key_or_button)) {
+            rl.KeyboardKey => {
+                const key: rl.KeyboardKey = key_or_button;
+                if (!rl.isKeyDown(key)) return false;
+            },
+            rl.MouseButton => {
+                const button: rl.MouseButton = key_or_button;
+                if (!rl.isMouseButtonDown(button)) return false;
+            },
+            else => @panic("Wrong type passed"),
+        }
+    }
+
+    return true;
+}
+
+fn isModifierKey(key: rl.KeyboardKey) bool {
+    return switch (key) {
+        .key_left_control,
+        .key_left_alt,
+        .key_left_shift,
+        .key_right_control,
+        .key_right_alt,
+        .key_right_shift,
+        => true,
+        else => false,
+    };
 }
