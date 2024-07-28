@@ -16,9 +16,18 @@ pub fn main() !void {
     std.log.info("screen size {d}x{d}", .{ width, height });
 
     const line_thickness = 4;
-    var old_position: ?rl.Vector2 = null;
-    var start_of_horisontal: ?rl.Vector2 = null;
-    var color = rl.Color.red;
+    const wheel_target_size = 100;
+    var color_wheel: ColorWheel = .{ .center = rl.Vector2.zero(), .size = 0 };
+    var drawing_state: union(enum) {
+        idle,
+        drawing_line: rl.Vector2,
+        drawing_straght_line: rl.Vector2,
+        picking_color,
+    } = .idle;
+    // _ = drawing_start; // autofix
+    // var old_position: ?rl.Vector2 = null;
+    // var start_of_horisontal: ?rl.Vector2 = null;
+    var color: rl.Color = rl.Color.red;
     const canvas = rl.loadRenderTexture(width, height);
     defer canvas.unload();
 
@@ -30,45 +39,68 @@ pub fn main() !void {
             color = getColorHash(color);
         }
 
-        const pos = rl.getMousePosition();
-        {
-            canvas.begin();
-            if (rl.isMouseButtonDown(.mouse_button_left) and !rl.isMouseButtonDown(.mouse_button_right)) {
-                if (old_position) |old| {
-                    rl.drawLineEx(old, pos, line_thickness, color);
-                } else {}
-                old_position = pos;
-            } else {
-                old_position = null;
-            }
-
-            canvas.end();
-        }
-        if (rl.isMouseButtonPressed(.mouse_button_right)) {
-            start_of_horisontal = pos;
-        }
-        if (rl.isMouseButtonReleased(.mouse_button_right)) {
-            if (start_of_horisontal) |start| {
-                canvas.begin();
-                drawNiceLine(start, pos, line_thickness, color);
-                canvas.end();
-            }
-            start_of_horisontal = null;
-        }
-
-        if (start_of_horisontal) |start| {
-            drawNiceLine(start, pos, line_thickness, color);
-        }
+        const current_pos = rl.getMousePosition();
         rl.drawTextureRec(canvas.texture, .{
             .x = 0,
             .y = 0,
             .width = @as(f32, @floatFromInt(canvas.texture.width)),
             .height = -@as(f32, @floatFromInt(canvas.texture.height)),
         }, rl.Vector2.zero(), rl.Color.white);
-        rl.drawCircleV(pos, line_thickness * 2, color);
+        drawing_state = switch (drawing_state) {
+            .idle => if (rl.isMouseButtonDown(.mouse_button_left))
+                .{ .drawing_line = current_pos }
+            else if (rl.isMouseButtonDown(.mouse_button_right))
+                .{ .drawing_straght_line = current_pos }
+            else if (isNextButtonPressed()) res: {
+                color_wheel = .{ .center = current_pos, .size = 0 };
+                break :res .picking_color;
+            } else .idle,
+
+            .drawing_line => |old_position| res: {
+                canvas.begin();
+                rl.drawLineEx(old_position, current_pos, line_thickness, color);
+                canvas.end();
+                break :res if (rl.isMouseButtonDown(.mouse_button_left))
+                    .{ .drawing_line = current_pos }
+                else
+                    .idle;
+            },
+            .drawing_straght_line => |old_position| res: {
+                drawNiceLine(old_position, current_pos, line_thickness, color);
+                if (rl.isMouseButtonReleased(.mouse_button_right)) {
+                    canvas.begin();
+                    drawNiceLine(old_position, current_pos, line_thickness, color);
+                    canvas.end();
+                    break :res .idle;
+                }
+                break :res drawing_state;
+            },
+            .picking_color => res: {
+                color = drawColorWheel(color_wheel.center, current_pos, color_wheel.size);
+                break :res if (isNextButtonPressed())
+                    .idle
+                else {
+                    color_wheel.size = expDecay(color_wheel.size, wheel_target_size, 10, rl.getFrameTime());
+                    break :res .picking_color;
+                };
+            },
+        };
+
+        if (drawing_state != .picking_color) {
+            color_wheel.size = expDecay(color_wheel.size, 0, 10, rl.getFrameTime());
+            _ = drawColorWheel(color_wheel.center, current_pos, color_wheel.size);
+        }
+
+        rl.drawCircleV(current_pos, line_thickness * 2, color);
+
         rl.endDrawing();
     }
 }
+
+const ColorWheel = struct {
+    center: rl.Vector2,
+    size: f32,
+};
 
 fn drawNiceLine(start: rl.Vector2, end: rl.Vector2, thickness: f32, color: rl.Color) void {
     const projected_end = projectToClosestLine(start, end);
@@ -96,4 +128,27 @@ fn getColorHash(value: anytype) rl.Color {
     const color: rl.Color = @bitCast(hash);
     const hsv = color.toHSV();
     return rl.Color.fromHSV(hsv.x, hsv.y, 1);
+}
+
+fn drawColorWheel(center: rl.Vector2, pos: rl.Vector2, radius: f32) rl.Color {
+    const segments = 360;
+    for (0..segments) |num| {
+        const frac = @as(f32, @floatFromInt(num)) / @as(f32, @floatFromInt(segments));
+        const angle = frac * 360;
+
+        const hue = frac * 360;
+        rl.drawCircleSector(
+            center,
+            radius,
+            angle,
+            angle + 360.0 / @as(comptime_float, segments),
+            10,
+            rl.Color.fromHSV(hue, 0.8, 0.8),
+        );
+    }
+    return rl.Color.fromHSV(-center.lineAngle(pos) / std.math.tau * 360, 1, 1);
+}
+
+fn expDecay(a: anytype, b: @TypeOf(a), lambda: @TypeOf(a), dt: @TypeOf(a)) @TypeOf(a) {
+    return std.math.lerp(a, b, 1 - @exp(-lambda * dt));
 }
