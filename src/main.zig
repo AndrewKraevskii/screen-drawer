@@ -4,12 +4,20 @@ const rl = @import("raylib");
 const self_name = "screen-drawer";
 
 pub fn main() !void {
+    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_impl.deinit();
+    const gpa = gpa_impl.allocator();
+
     rl.setConfigFlags(.{
         .window_topmost = true,
         .window_transparent = true,
         .window_undecorated = true,
         .window_maximized = true,
     });
+    var not_saving = std.Thread.ResetEvent{};
+    defer not_saving.wait();
+    not_saving.set();
+
     rl.initWindow(0, 0, "Drawer");
     defer rl.closeWindow();
 
@@ -28,8 +36,6 @@ pub fn main() !void {
         picking_color,
     } = .idle;
     var color: rl.Color = rl.Color.red;
-    var save_indicator_time: ?f32 = 0;
-
     const canvas = rl.loadRenderTexture(width, height);
 
     if (loadCanvas(picture_name)) |texture| {
@@ -47,7 +53,6 @@ pub fn main() !void {
         },
         else => return e,
     }
-
     defer canvas.unload();
 
     while (!rl.windowShouldClose() and rl.isWindowFocused()) {
@@ -105,26 +110,19 @@ pub fn main() !void {
                 };
             },
         };
-
         if (drawing_state != .picking_color) {
             color_wheel.size = expDecay(color_wheel.size, 0, 10, rl.getFrameTime());
             _ = drawColorWheel(color_wheel.center, current_pos, color_wheel.size);
         }
 
-        if (rl.isKeyDown(.key_left_control) and rl.isKeyPressed(.key_s)) {
-            var timer = std.time.Timer.start() catch @panic("Timer not avalible");
-            try exportCanvas(canvas.texture, picture_name);
-            const exporting_took = timer.read(); // countering first raylibs getFrameTime which includes export time
-            save_indicator_time = 4.0 + @as(f32, @floatFromInt(exporting_took)) / std.time.ns_per_s;
+        const saving_now = !not_saving.isSet();
+        if (rl.isKeyDown(.key_left_control) and rl.isKeyPressed(.key_s) and !saving_now) {
+            not_saving.reset();
+            try exportCanvas(gpa, canvas.texture, picture_name, &not_saving);
         }
 
-        if (save_indicator_time) |*time| {
-            time.* -= rl.getFrameTime();
-            if (time.* < 0) {
-                save_indicator_time = null;
-            } else {
-                rl.drawCircle(30, 30, 20, rl.Color.red.alpha(@abs(std.math.sin(time.* * 5))));
-            }
+        if (saving_now) {
+            rl.drawCircle(30, 30, 20, rl.Color.red);
         }
 
         if (rl.isKeyPressed(.key_c)) {
@@ -138,20 +136,34 @@ pub fn main() !void {
     }
 }
 
-fn exportCanvas(texture: rl.Texture, name: []const u8) !void {
+fn exportCanvas(alloc: std.mem.Allocator, texture: rl.Texture, name: []const u8, saving: *std.Thread.ResetEvent) !void {
     var buffer: [std.fs.max_path_bytes * 2]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buffer);
-    const alloc = fba.allocator();
 
-    const data_dir_path = try getAppDataDirEnsurePathExist(alloc, self_name);
+    const data_dir_path = try getAppDataDirEnsurePathExist(fba.allocator(), self_name);
     const picture_path = try std.fs.path.joinZ(alloc, &.{ data_dir_path, name });
 
     const screenshot = rl.loadImageFromTexture(texture);
+    std.log.info("Loaded image from texture", .{});
 
-    if (rl.exportImage(screenshot, picture_path))
-        std.log.info("Written image to {s}", .{picture_path})
-    else
-        std.log.err("Failed to write {s}", .{picture_path});
+    const thread = try std.Thread.spawn(.{
+        .allocator = std.heap.page_allocator,
+        .stack_size = 1024 * 1024,
+    }, struct {
+        pub fn foo(_alloc: std.mem.Allocator, image: rl.Image, path: [:0]const u8, cond: *std.Thread.ResetEvent) void {
+            // var size: i32 = undefined;
+            const buff = rl.exportImage(image, path);
+            // std.log.info("exported image to memory", .{});
+            if (buff)
+                std.log.info("Written image to {s}", .{path})
+            else
+                std.log.err("Failed to write {s}", .{path});
+            image.unload();
+            _alloc.free(path);
+            cond.set();
+        }
+    }.foo, .{ alloc, screenshot, picture_path, saving });
+    _ = thread.detach();
 }
 
 fn loadCanvas(name: []const u8) !rl.Texture {
