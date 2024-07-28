@@ -134,6 +134,9 @@ pub fn main() !void {
 
         rl.endDrawing();
     }
+    not_saving.wait();
+    not_saving.reset();
+    try exportCanvas(gpa, canvas.texture, picture_name, &not_saving);
 }
 
 fn exportCanvas(alloc: std.mem.Allocator, texture: rl.Texture, name: []const u8, saving: *std.Thread.ResetEvent) !void {
