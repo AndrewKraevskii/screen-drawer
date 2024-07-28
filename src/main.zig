@@ -4,10 +4,6 @@ const rl = @import("raylib");
 const self_name = "screen-drawer";
 
 pub fn main() !void {
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
-    const gpa = gpa_impl.allocator();
-    _ = gpa; // autofix
-
     rl.setConfigFlags(.{
         .window_topmost = true,
         .window_transparent = true,
@@ -32,6 +28,7 @@ pub fn main() !void {
         picking_color,
     } = .idle;
     var color: rl.Color = rl.Color.red;
+    var save_indicator_time: ?f32 = 0;
 
     const canvas = rl.loadRenderTexture(width, height);
 
@@ -115,7 +112,19 @@ pub fn main() !void {
         }
 
         if (rl.isKeyDown(.key_left_control) and rl.isKeyPressed(.key_s)) {
+            var timer = std.time.Timer.start() catch @panic("Timer not avalible");
             try exportCanvas(canvas.texture, picture_name);
+            const exporting_took = timer.read(); // countering first raylibs getFrameTime which includes export time
+            save_indicator_time = 4.0 + @as(f32, @floatFromInt(exporting_took)) / std.time.ns_per_s;
+        }
+
+        if (save_indicator_time) |*time| {
+            time.* -= rl.getFrameTime();
+            if (time.* < 0) {
+                save_indicator_time = null;
+            } else {
+                rl.drawCircle(30, 30, 20, rl.Color.red.alpha(@abs(std.math.sin(time.* * 5))));
+            }
         }
 
         if (rl.isKeyPressed(.key_c)) {
