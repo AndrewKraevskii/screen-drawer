@@ -48,7 +48,7 @@ pub fn main() !void {
     const height = rl.getScreenHeight();
     std.log.info("screen size {d}x{d}", .{ width, height });
 
-    const picture_name = "drawing.png";
+    const picture_name = "drawing.qoi";
     const line_thickness = 4;
     const wheel_target_size = 100;
 
