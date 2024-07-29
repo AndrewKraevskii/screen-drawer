@@ -26,6 +26,10 @@ const key_bindings = struct {
 /// Set to std.math.inf(f32) to disable animations.
 const animation_speed = 10;
 
+pub const std_options = std.Options{
+    .log_level = .debug,
+};
+
 pub fn main() !void {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_impl.deinit();
@@ -96,7 +100,7 @@ pub fn main() !void {
                 .{ .drawing = current_pos }
             else if (isDown(key_bindings.draw_line))
                 .{ .drawing_line = current_pos }
-            else if (isDown(key_bindings.picking_color)) res: {
+            else if (isPressed(key_bindings.picking_color)) res: {
                 color_wheel = .{ .center = current_pos, .size = 0 };
                 break :res .picking_color;
             } else .idle,
@@ -122,7 +126,7 @@ pub fn main() !void {
             },
             .picking_color => res: {
                 color = drawColorWheel(color_wheel.center, current_pos, color_wheel.size);
-                break :res if (!isDown(key_bindings.picking_color))
+                break :res if (isPressed(key_bindings.picking_color))
                     .idle
                 else {
                     color_wheel.size = expDecay(color_wheel.size, wheel_target_size, animation_speed, rl.getFrameTime());
@@ -174,8 +178,8 @@ fn exportCanvas(alloc: std.mem.Allocator, texture: rl.Texture, name: []const u8,
         .stack_size = 1024 * 1024,
     }, struct {
         pub fn foo(_alloc: std.mem.Allocator, image: rl.Image, path: [:0]const u8, cond: *std.Thread.ResetEvent) void {
-            const buff = rl.exportImage(image, path);
-            if (buff)
+            const is_saved = rl.exportImage(image, path);
+            if (is_saved)
                 std.log.info("Written image to {s}", .{path})
             else
                 std.log.err("Failed to write {s}", .{path});
@@ -262,22 +266,45 @@ fn expDecay(a: anytype, b: @TypeOf(a), lambda: @TypeOf(a), dt: @TypeOf(a)) @Type
     return std.math.lerp(a, b, 1 - @exp(-lambda * dt));
 }
 
+/// True if all passed keys and buttons are down
 fn isDown(keys_or_buttons: anytype) bool {
     inline for (keys_or_buttons) |key_or_button| {
         switch (@TypeOf(key_or_button)) {
             rl.KeyboardKey => {
-                const key: rl.KeyboardKey = key_or_button;
-                if (!rl.isKeyDown(key)) return false;
+                if (!rl.isKeyDown(key_or_button)) return false;
             },
             rl.MouseButton => {
-                const button: rl.MouseButton = key_or_button;
-                if (!rl.isMouseButtonDown(button)) return false;
+                if (!rl.isMouseButtonDown(key_or_button)) return false;
             },
             else => @panic("Wrong type passed"),
         }
     }
 
     return true;
+}
+
+/// True if isDown(kb) true and at least one button pressed on this frame
+fn isPressed(keys_or_buttons: anytype) bool {
+    if (!isDown(keys_or_buttons)) return false;
+
+    var is_one_kb_pressed: bool = false;
+    inline for (keys_or_buttons) |key_or_button| {
+        switch (@TypeOf(key_or_button)) {
+            rl.KeyboardKey => {
+                if (rl.isKeyPressed(key_or_button) and !isModifierKey(key_or_button)) {
+                    is_one_kb_pressed = true;
+                }
+            },
+            rl.MouseButton => {
+                if (rl.isMouseButtonPressed(key_or_button)) {
+                    is_one_kb_pressed = true;
+                }
+            },
+            else => unreachable, // since we checked it in isDown
+        }
+    }
+
+    return is_one_kb_pressed;
 }
 
 fn isModifierKey(key: rl.KeyboardKey) bool {
