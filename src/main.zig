@@ -1,15 +1,19 @@
 const std = @import("std");
 const rl = @import("raylib");
+const Allocator = std.mem.Allocator;
 
-const self_name = "screen-drawer";
+const app_name = "screen-drawer";
 
 const key_bindings = struct {
     // zig fmt: off
-    pub const draw          = .{ rl.MouseButton.mouse_button_left };
-    pub const draw_line     = .{ rl.MouseButton.mouse_button_right };
-    pub const picking_color = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
-    pub const save          = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_s };
-    pub const clear         = .{ rl.KeyboardKey.key_c };
+    pub const draw            = .{ rl.MouseButton.mouse_button_left };
+    pub const confirm         = .{ rl.MouseButton.mouse_button_left };
+    pub const draw_line       = .{ rl.MouseButton.mouse_button_right };
+    pub const picking_color   = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
+    pub const save            = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_s };
+    pub const clear           = .{ rl.KeyboardKey.key_c };
+
+    pub const view_all_images = .{ rl.KeyboardKey.key_left_bracket };
     // zig fmt: on
 
     comptime {
@@ -48,11 +52,15 @@ pub fn main() !void {
     rl.initWindow(0, 0, "Drawer");
     defer rl.closeWindow();
 
-    const width = rl.getScreenWidth();
-    const height = rl.getScreenHeight();
+    const width: u31 = @intCast(rl.getScreenWidth());
+    const height: u31 = @intCast(rl.getScreenHeight());
     std.log.info("screen size {d}x{d}", .{ width, height });
 
-    const picture_name = "drawing.qoi";
+    var image_loader = ImageLoader.init(gpa);
+    defer image_loader.deinit();
+    try image_loader.loadAllImages(app_name);
+
+    var picture_name: []const u8 = "drawing.qoi";
     const line_thickness = 4;
     const wheel_target_size = 100;
 
@@ -62,81 +70,138 @@ pub fn main() !void {
         drawing: rl.Vector2,
         drawing_line: rl.Vector2,
         picking_color,
+        view_all_images,
     } = .idle;
     var color: rl.Color = rl.Color.red;
     const canvas = rl.loadRenderTexture(width, height);
-
-    if (loadCanvas(picture_name)) |texture| {
-        canvas.begin();
-        defer canvas.end();
-        rl.drawTextureRec(texture, .{
-            .x = 0,
-            .y = 0,
-            .width = @as(f32, @floatFromInt(texture.width)),
-            .height = -@as(f32, @floatFromInt(texture.height)), // negative to flip image verticaly
-        }, rl.Vector2.zero(), rl.Color.white);
-    } else |e| switch (e) {
-        error.FileNotFound => {
-            std.log.info("no old images saves", .{});
-        },
-        else => return e,
-    }
     defer canvas.unload();
+    {
+        canvas.begin();
+        rl.clearBackground(rl.Color.blank);
+        const first_image = image_loader.loaded_images.values()[0];
+        const texture = rl.loadTextureFromImage(first_image);
+        defer texture.unload();
+
+        rl.clearBackground(rl.Color.blank);
+        texture.draw(0, 0, rl.Color.white);
+        flushRaylib();
+        canvas.end();
+    }
 
     while (!rl.windowShouldClose() and rl.isWindowFocused()) {
         rl.beginDrawing();
         rl.clearBackground(rl.Color.blank);
 
-        const current_pos = rl.getMousePosition();
-        rl.drawTextureRec(canvas.texture, .{
-            .x = 0,
-            .y = 0,
-            .width = @as(f32, @floatFromInt(canvas.texture.width)),
-            .height = -@as(f32, @floatFromInt(canvas.texture.height)), // negative to flip image verticaly
-        }, rl.Vector2.zero(), rl.Color.white);
+        const mouse_pos = rl.getMousePosition();
+        if (drawing_state != .view_all_images)
+            rl.drawTextureRec(canvas.texture, .{
+                .x = 0,
+                .y = 0,
+                .width = @as(f32, @floatFromInt(canvas.texture.width)),
+                .height = -@as(f32, @floatFromInt(canvas.texture.height)), // negative to flip image verticaly
+            }, rl.Vector2.zero(), rl.Color.white);
 
         drawing_state = switch (drawing_state) {
             .idle => if (isDown(key_bindings.draw))
-                .{ .drawing = current_pos }
+                .{ .drawing = mouse_pos }
             else if (isDown(key_bindings.draw_line))
-                .{ .drawing_line = current_pos }
-            else if (isPressed(key_bindings.picking_color)) res: {
-                color_wheel = .{ .center = current_pos, .size = 0 };
-                break :res .picking_color;
+                .{ .drawing_line = mouse_pos }
+            else if (isPressed(key_bindings.picking_color)) blk: {
+                color_wheel = .{ .center = mouse_pos, .size = 0 };
+                break :blk .picking_color;
+            } else if (isPressed(key_bindings.view_all_images)) blk: {
+                try image_loader.updateImageWithTexture(picture_name, canvas.texture);
+                break :blk .view_all_images;
             } else .idle,
 
-            .drawing => |old_position| res: {
+            .drawing => |old_position| blk: {
                 canvas.begin();
-                rl.drawLineEx(old_position, current_pos, line_thickness, color);
+                rl.drawLineEx(old_position, mouse_pos, line_thickness, color);
                 canvas.end();
-                break :res if (isDown(key_bindings.draw))
-                    .{ .drawing = current_pos }
+                break :blk if (isDown(key_bindings.draw))
+                    .{ .drawing = mouse_pos }
                 else
                     .idle;
             },
-            .drawing_line => |old_position| res: {
-                drawNiceLine(old_position, current_pos, line_thickness, color);
+            .drawing_line => |old_position| blk: {
+                drawNiceLine(old_position, mouse_pos, line_thickness, color);
                 if (!isDown(key_bindings.draw_line)) {
                     canvas.begin();
-                    drawNiceLine(old_position, current_pos, line_thickness, color);
+                    drawNiceLine(old_position, mouse_pos, line_thickness, color);
                     canvas.end();
-                    break :res .idle;
+                    break :blk .idle;
                 }
-                break :res drawing_state;
+                break :blk drawing_state;
             },
-            .picking_color => res: {
-                color = drawColorWheel(color_wheel.center, current_pos, color_wheel.size);
-                break :res if (isPressed(key_bindings.picking_color))
+            .picking_color => blk: {
+                color = color_wheel.draw(mouse_pos);
+                break :blk if (isPressed(key_bindings.picking_color))
                     .idle
                 else {
                     color_wheel.size = expDecay(color_wheel.size, wheel_target_size, animation_speed, rl.getFrameTime());
-                    break :res .picking_color;
+                    break :blk .picking_color;
                 };
+            },
+            .view_all_images => blk: {
+                const padding = rl.Vector2.init(50, 50);
+                const screen_size = rl.Vector2.init(@floatFromInt(width), @floatFromInt(height));
+
+                const images_on_one_row = 3;
+
+                const texture_size = screen_size.subtract(padding).scale(1.0 / @as(f32, @floatFromInt(images_on_one_row))).subtract(padding);
+                const scale = texture_size.x / @as(f32, @floatFromInt(width));
+
+                for (image_loader.loaded_images.values(), 0..) |image, index| {
+                    const texture = rl.loadTextureFromImage(image);
+                    defer texture.unload();
+                    const col = index % images_on_one_row;
+                    const row = index / images_on_one_row;
+                    const pos = padding.add(
+                        rl.Vector2.init(@floatFromInt(col), @floatFromInt(row))
+                            .multiply(texture_size.add(padding.scale(2))),
+                    );
+
+                    const actual_texture_size = rl.Vector2.init(@floatFromInt(image.width), @floatFromInt(image.height));
+
+                    const border_size = rl.Vector2{ .x = 10, .y = 10 };
+                    const backdrop_size = actual_texture_size.scale(scale).add(border_size.scale(2));
+                    const backdrop_pos = pos.subtract(border_size);
+                    const backdrop_rect = rl.Rectangle{
+                        .x = backdrop_pos.x,
+                        .y = backdrop_pos.y,
+                        .width = backdrop_size.x,
+                        .height = backdrop_size.y,
+                    };
+
+                    const border_color = if (rectanglePointColision(mouse_pos, backdrop_rect))
+                        rl.Color.light_gray
+                    else
+                        rl.Color.gray;
+
+                    if (rectanglePointColision(mouse_pos, backdrop_rect) and isPressed(key_bindings.confirm)) {
+                        const selected_file_name = image_loader.loaded_images.keys()[index];
+                        try exportCanvas(gpa, canvas.texture, picture_name, &not_saving);
+                        picture_name = selected_file_name;
+                        canvas.begin();
+                        rl.clearBackground(rl.Color.blank);
+                        texture.draw(0, 0, rl.Color.white);
+                        canvas.end();
+                        break :blk .idle;
+                    }
+
+                    rl.drawRectangleRec(backdrop_rect, rl.Color.black.alpha(0.6));
+                    rl.drawRectangleLinesEx(backdrop_rect, 3, border_color);
+
+                    texture.drawEx(pos, 0, scale, rl.Color.white);
+                    flushRaylib();
+                }
+
+                break :blk .view_all_images;
             },
         };
         if (drawing_state != .picking_color) {
             color_wheel.size = expDecay(color_wheel.size, 0, animation_speed, rl.getFrameTime());
-            _ = drawColorWheel(color_wheel.center, current_pos, color_wheel.size);
+            _ = color_wheel.draw(mouse_pos);
         }
 
         const saving_now = !not_saving.isSet();
@@ -154,7 +219,7 @@ pub fn main() !void {
             rl.clearBackground(rl.Color.blank);
             canvas.end();
         }
-        rl.drawCircleV(current_pos, line_thickness * 2, color);
+        rl.drawCircleV(mouse_pos, line_thickness * 2, color);
 
         rl.endDrawing();
     }
@@ -163,11 +228,11 @@ pub fn main() !void {
     try exportCanvas(gpa, canvas.texture, picture_name, &not_saving);
 }
 
-fn exportCanvas(alloc: std.mem.Allocator, texture: rl.Texture, name: []const u8, saving: *std.Thread.ResetEvent) !void {
+fn exportCanvas(alloc: Allocator, texture: rl.Texture, name: []const u8, saving: *std.Thread.ResetEvent) !void {
     var buffer: [std.fs.max_path_bytes * 2]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buffer);
 
-    const data_dir_path = try getAppDataDirEnsurePathExist(fba.allocator(), self_name);
+    const data_dir_path = try getAppDataDirEnsurePathExist(fba.allocator(), app_name);
     const picture_path = try std.fs.path.joinZ(alloc, &.{ data_dir_path, name });
 
     const screenshot = rl.loadImageFromTexture(texture);
@@ -177,7 +242,7 @@ fn exportCanvas(alloc: std.mem.Allocator, texture: rl.Texture, name: []const u8,
         .allocator = std.heap.page_allocator,
         .stack_size = 1024 * 1024,
     }, struct {
-        pub fn foo(_alloc: std.mem.Allocator, image: rl.Image, path: [:0]const u8, cond: *std.Thread.ResetEvent) void {
+        pub fn foo(_alloc: Allocator, image: rl.Image, path: [:0]const u8, cond: *std.Thread.ResetEvent) void {
             const is_saved = rl.exportImage(image, path);
             if (is_saved)
                 std.log.info("Written image to {s}", .{path})
@@ -196,7 +261,7 @@ fn loadCanvas(name: []const u8) !rl.Texture {
     var fba = std.heap.FixedBufferAllocator.init(&buffer);
     const alloc = fba.allocator();
 
-    const data_dir_path = try getAppDataDirEnsurePathExist(alloc, self_name);
+    const data_dir_path = try getAppDataDirEnsurePathExist(alloc, app_name);
     const picture_path = try std.fs.path.joinZ(alloc, &.{ data_dir_path, name });
 
     const image = rl.loadImage(picture_path);
@@ -204,7 +269,7 @@ fn loadCanvas(name: []const u8) !rl.Texture {
     return rl.Texture.fromImage(image);
 }
 
-pub fn getAppDataDirEnsurePathExist(alloc: std.mem.Allocator, appname: []const u8) ![]u8 {
+pub fn getAppDataDirEnsurePathExist(alloc: Allocator, appname: []const u8) ![]u8 {
     const data_dir_path = try std.fs.getAppDataDir(alloc, appname);
 
     std.fs.makeDirAbsolute(data_dir_path) catch |e| switch (e) {
@@ -217,6 +282,25 @@ pub fn getAppDataDirEnsurePathExist(alloc: std.mem.Allocator, appname: []const u
 const ColorWheel = struct {
     center: rl.Vector2,
     size: f32,
+
+    pub fn draw(wheel: ColorWheel, pos: rl.Vector2) rl.Color {
+        const segments = 360;
+        for (0..segments) |num| {
+            const frac = @as(f32, @floatFromInt(num)) / @as(f32, @floatFromInt(segments));
+            const angle = frac * 360;
+
+            const hue = frac * 360;
+            rl.drawCircleSector(
+                wheel.center,
+                wheel.size,
+                angle,
+                angle + 360.0 / @as(comptime_float, segments),
+                10,
+                rl.Color.fromHSV(hue, 0.8, 0.8),
+            );
+        }
+        return rl.Color.fromHSV(-wheel.center.lineAngle(pos) / std.math.tau * 360, 1, 1);
+    }
 };
 
 fn drawNiceLine(start: rl.Vector2, end: rl.Vector2, thickness: f32, color: rl.Color) void {
@@ -243,25 +327,6 @@ fn getColorHash(value: anytype) rl.Color {
     return rl.Color.fromHSV(hsv.x, hsv.y, 1);
 }
 
-fn drawColorWheel(center: rl.Vector2, pos: rl.Vector2, radius: f32) rl.Color {
-    const segments = 360;
-    for (0..segments) |num| {
-        const frac = @as(f32, @floatFromInt(num)) / @as(f32, @floatFromInt(segments));
-        const angle = frac * 360;
-
-        const hue = frac * 360;
-        rl.drawCircleSector(
-            center,
-            radius,
-            angle,
-            angle + 360.0 / @as(comptime_float, segments),
-            10,
-            rl.Color.fromHSV(hue, 0.8, 0.8),
-        );
-    }
-    return rl.Color.fromHSV(-center.lineAngle(pos) / std.math.tau * 360, 1, 1);
-}
-
 fn expDecay(a: anytype, b: @TypeOf(a), lambda: @TypeOf(a), dt: @TypeOf(a)) @TypeOf(a) {
     return std.math.lerp(a, b, 1 - @exp(-lambda * dt));
 }
@@ -270,12 +335,11 @@ fn expDecay(a: anytype, b: @TypeOf(a), lambda: @TypeOf(a), dt: @TypeOf(a)) @Type
 fn isDown(keys_or_buttons: anytype) bool {
     inline for (keys_or_buttons) |key_or_button| {
         switch (@TypeOf(key_or_button)) {
-            rl.KeyboardKey => {
-                if (!rl.isKeyDown(key_or_button)) return false;
-            },
-            rl.MouseButton => {
-                if (!rl.isMouseButtonDown(key_or_button)) return false;
-            },
+            rl.KeyboardKey => if (!rl.isKeyDown(key_or_button))
+                return false,
+            rl.MouseButton => if (!rl.isMouseButtonDown(key_or_button))
+                return false,
+
             else => @panic("Wrong type passed"),
         }
     }
@@ -287,24 +351,17 @@ fn isDown(keys_or_buttons: anytype) bool {
 fn isPressed(keys_or_buttons: anytype) bool {
     if (!isDown(keys_or_buttons)) return false;
 
-    var is_one_kb_pressed: bool = false;
     inline for (keys_or_buttons) |key_or_button| {
         switch (@TypeOf(key_or_button)) {
-            rl.KeyboardKey => {
-                if (rl.isKeyPressed(key_or_button) and !isModifierKey(key_or_button)) {
-                    is_one_kb_pressed = true;
-                }
-            },
-            rl.MouseButton => {
-                if (rl.isMouseButtonPressed(key_or_button)) {
-                    is_one_kb_pressed = true;
-                }
-            },
+            rl.KeyboardKey => if (rl.isKeyPressed(key_or_button) and !isModifierKey(key_or_button))
+                return true,
+            rl.MouseButton => if (rl.isMouseButtonPressed(key_or_button))
+                return true,
             else => unreachable, // since we checked it in isDown
         }
     }
 
-    return is_one_kb_pressed;
+    return false;
 }
 
 fn isModifierKey(key: rl.KeyboardKey) bool {
@@ -318,4 +375,92 @@ fn isModifierKey(key: rl.KeyboardKey) bool {
         => true,
         else => false,
     };
+}
+
+const ImageLoader = struct {
+    loaded_images: std.StringArrayHashMapUnmanaged(rl.Image),
+    alloc: Allocator,
+
+    pub fn init(alloc: Allocator) ImageLoader {
+        return .{
+            .loaded_images = .{},
+            .alloc = alloc,
+        };
+    }
+
+    pub fn updateImageWithTexture(loader: *ImageLoader, file_name: []const u8, texture: rl.Texture) !void {
+        const image = rl.Image.fromTexture(texture);
+        const gop = try loader.loaded_images.getOrPut(loader.alloc, file_name);
+        if (gop.found_existing) {
+            gop.value_ptr.unload();
+        }
+        gop.value_ptr.* = image;
+        try loader.exportImage(file_name);
+    }
+
+    pub fn loadAllImages(loader: *ImageLoader, data_dir_name: []const u8) !void {
+        var buffer: [std.fs.max_path_bytes * 2]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&buffer);
+        defer std.debug.assert(fba.end_index == 0);
+        const alloc = fba.allocator();
+
+        const data_dir_path = try getAppDataDirEnsurePathExist(alloc, data_dir_name);
+        defer alloc.free(data_dir_path);
+
+        const data_dir = try std.fs.openDirAbsolute(data_dir_path, .{
+            .iterate = true,
+            .no_follow = true,
+        });
+        var it = data_dir.iterate();
+        while (try it.next()) |entry| {
+            const picture_path = try std.fs.path.joinZ(alloc, &.{ data_dir_path, entry.name });
+            defer alloc.free(picture_path);
+            try loader.loadImage(picture_path);
+        }
+    }
+
+    pub fn loadImage(loader: *ImageLoader, full_path: [:0]const u8) !void {
+        const image = rl.loadImage(full_path);
+        const basename = try loader.alloc.dupe(u8, std.fs.path.basename(full_path));
+        errdefer loader.alloc.free(basename);
+        try loader.loaded_images.put(loader.alloc, basename, image);
+    }
+
+    pub fn exportImage(loader: *ImageLoader, name: []const u8) !void {
+        var buffer: [std.fs.max_path_bytes * 2]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&buffer);
+
+        const data_dir_path = try getAppDataDirEnsurePathExist(fba.allocator(), app_name);
+        const picture_path = try std.fs.path.joinZ(fba.allocator(), &.{ data_dir_path, name });
+
+        std.log.info("Loaded image from texture", .{});
+
+        const image = loader.loaded_images.get(name) orelse {
+            return error.ImageNotFound;
+        };
+
+        const is_saved = rl.exportImage(image, picture_path);
+        if (is_saved)
+            std.log.info("Written image to {s}", .{picture_path})
+        else
+            std.log.err("Failed to write {s}", .{picture_path});
+    }
+
+    pub fn deinit(loader: *ImageLoader) void {
+        for (loader.loaded_images.keys(), loader.loaded_images.values()) |key, value| {
+            loader.alloc.free(key);
+            value.unload();
+        }
+        loader.loaded_images.deinit(loader.alloc);
+    }
+};
+
+fn rectanglePointColision(point: rl.Vector2, rect: rl.Rectangle) bool {
+    return point.x >= rect.x and point.y > rect.y and
+        point.x < rect.x + rect.width and point.y < rect.y + rect.height;
+}
+
+fn flushRaylib() void {
+    rl.beginMode2D(std.mem.zeroes(rl.Camera2D));
+    rl.endMode2D();
 }
