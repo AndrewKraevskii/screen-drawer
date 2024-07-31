@@ -10,12 +10,10 @@ save_directory: std.fs.Dir,
 images: Storage,
 textures: std.AutoArrayHashMapUnmanaged(usize, rl.Texture),
 
+thread_pool: std.Thread.Pool,
 mutex: std.Thread.Mutex,
 work_condition: std.Thread.Condition,
 should_thread_quit: bool,
-
-/// Images requested for loading
-load_queue: std.ArrayListUnmanaged(u32),
 
 const Storage = std.StringArrayHashMapUnmanaged(?Image);
 
@@ -37,6 +35,7 @@ pub fn init(
     }
 
     return .{
+        .thread_pool = undefined,
         .textures = .{},
         .gpa = gpa,
         .images = images,
@@ -44,18 +43,18 @@ pub fn init(
         .mutex = .{},
         .work_condition = .{},
         .should_thread_quit = false,
-        .load_queue = .{},
     };
 }
 
-pub fn startLoading(storage: *@This()) void {
-    _ = std.Thread.spawn(.{
+pub fn startLoading(storage: *@This()) !void {
+    try storage.thread_pool.init(.{
         .allocator = storage.gpa,
-    }, loaderThread, .{storage}) catch @panic("Can't spawn thread");
+    });
 }
 
 pub fn deinit(storage: *@This()) void {
     {
+        storage.flushFilesOnDisc();
         storage.mutex.lock();
         defer storage.mutex.unlock();
         storage.should_thread_quit = true;
@@ -69,9 +68,20 @@ pub fn deinit(storage: *@This()) void {
             texture.unload();
         storage.textures.deinit(storage.gpa);
         storage.save_directory.close();
-        storage.load_queue.deinit(storage.gpa);
     }
-    storage.work_condition.signal();
+    storage.work_condition.broadcast();
+    storage.thread_pool.deinit();
+}
+
+pub fn flushFilesOnDisc(storage: *@This()) void {
+    for (storage.images.keys(), storage.images.values()) |name, maybe_image| {
+        const image = maybe_image orelse continue;
+
+        var buffer: [std.fs.max_path_bytes]u8 = undefined;
+        const path = @as([:0]u8, @ptrCast(storage.save_directory.realpath(name, &buffer) catch @panic("Export error")));
+        path[path.len] = 0;
+        _ = image.exportToFile(path);
+    }
 }
 
 pub fn loaded(storage: *@This()) usize {
@@ -106,18 +116,7 @@ pub fn getImage(storage: *@This(), index: usize) error{OutOfRange}!?Image {
     if (index >= storage.len()) return error.OutOfRange;
     const small_index = std.math.cast(u32, index) orelse return error.OutOfRange;
     return storage.images.values()[small_index] orelse {
-        if (std.mem.indexOfScalar(
-            u32,
-            storage.load_queue.items,
-            small_index,
-        ) != null) return null;
-        storage.load_queue.append(
-            storage.gpa,
-            small_index,
-        ) catch {
-            std.log.err("out of memory can't queue image loading", .{});
-            return null;
-        };
+        storage.thread_pool.spawn(loaderThread, .{ storage, small_index }) catch @panic("adfasfsf");
         log.info("{d} appended to queue", .{small_index});
         changed = true;
         return null;
@@ -149,45 +148,25 @@ pub fn getTexture(storage: *@This(), index: usize) !?rl.Texture {
     return texture;
 }
 
-fn loaderThread(storage: *@This()) void {
-    log.info("Started loader thread", .{});
-    while (true) {
-        storage.mutex.lock();
-        log.info("Locked thread", .{});
-        if (storage.load_queue.items.len == 0) {
-            log.info("Queue is empty waiting", .{});
-            storage.work_condition.wait(&storage.mutex);
-            log.info("Condition fired", .{});
-        }
-        if (storage.should_thread_quit) {
-            log.info("Exiting", .{});
-            return;
-        }
-
-        const items = storage.gpa.dupe(u32, storage.load_queue.items) catch @panic("OOM");
-        defer storage.gpa.free(items);
-
-        log.info("Loading {any}", .{items});
+fn loaderThread(storage: *@This(), index: u32) void {
+    storage.mutex.lock();
+    var images_slice = storage.images.values();
+    if (images_slice[index] != null) {
         storage.mutex.unlock();
-
-        var images_slice = storage.images.values();
-        for (items) |index| {
-            if (images_slice[index] != null) continue;
-            const file_name = storage.images.keys()[index];
-
-            const image_encoded = storage.save_directory.readFileAllocOptions(storage.gpa, file_name, 1024 * 1024 * 1024, 10 * 1024 * 1024, 1, 0) catch |e| {
-                @panic(@errorName(e));
-            };
-            defer storage.gpa.free(image_encoded);
-
-            const image = rl.loadImageFromMemory(".qoi", image_encoded);
-            log.info("Loaded image size of {d}x{d}", .{ image.width, image.height });
-            storage.mutex.lock();
-            images_slice[index] = image;
-            defer storage.mutex.unlock();
-        }
-        storage.mutex.lock();
-        storage.load_queue.clearRetainingCapacity();
-        storage.mutex.unlock();
+        return;
     }
+
+    const file_name = storage.images.keys()[index];
+    storage.mutex.unlock();
+
+    const image_encoded = storage.save_directory.readFileAllocOptions(storage.gpa, file_name, 1024 * 1024 * 1024, 10 * 1024 * 1024, 1, 0) catch |e| {
+        @panic(@errorName(e));
+    };
+    defer storage.gpa.free(image_encoded);
+
+    const image = rl.loadImageFromMemory(".qoi", image_encoded);
+    log.info("Loaded image size of {d}x{d}", .{ image.width, image.height });
+    storage.mutex.lock();
+    images_slice[index] = image;
+    defer storage.mutex.unlock();
 }

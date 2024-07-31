@@ -58,7 +58,7 @@ pub fn main() !void {
     defer gpa.free(save_directory);
     var image_loader = try ImageStorage.init(gpa, save_directory);
     defer image_loader.deinit();
-    image_loader.startLoading();
+    try image_loader.startLoading();
 
     const line_thickness = 4;
     const wheel_target_size = 100;
@@ -201,6 +201,7 @@ pub fn main() !void {
         }
         rl.drawCircleV(mouse_pos, line_thickness * 2, color);
 
+        rl.drawFPS(0, 0);
         rl.endDrawing();
     }
 }
