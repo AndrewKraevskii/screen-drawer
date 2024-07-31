@@ -12,7 +12,6 @@ textures: std.AutoArrayHashMapUnmanaged(usize, rl.Texture),
 
 thread_pool: std.Thread.Pool,
 mutex: std.Thread.Mutex,
-work_condition: std.Thread.Condition,
 should_thread_quit: bool,
 
 const Storage = std.StringArrayHashMapUnmanaged(?Image);
@@ -41,7 +40,6 @@ pub fn init(
         .images = images,
         .save_directory = dir,
         .mutex = .{},
-        .work_condition = .{},
         .should_thread_quit = false,
     };
 }
@@ -69,19 +67,21 @@ pub fn deinit(storage: *@This()) void {
         storage.textures.deinit(storage.gpa);
         storage.save_directory.close();
     }
-    storage.work_condition.broadcast();
     storage.thread_pool.deinit();
 }
 
-pub fn flushFilesOnDisc(storage: *@This()) void {
+fn flushFilesOnDisc(storage: *@This()) void {
     for (storage.images.keys(), storage.images.values()) |name, maybe_image| {
         const image = maybe_image orelse continue;
-
-        var buffer: [std.fs.max_path_bytes]u8 = undefined;
-        const path = @as([:0]u8, @ptrCast(storage.save_directory.realpath(name, &buffer) catch @panic("Export error")));
-        path[path.len] = 0;
-        _ = image.exportToFile(path);
+        storage.thread_pool.spawn(flushFileOnDisc, .{ storage, name, image }) catch @panic("Export error");
+        storage.flushFileOnDisc(name, image);
     }
+}
+fn flushFileOnDisc(storage: *@This(), name: []const u8, image: rl.Image) void {
+    var buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const path = @as([:0]u8, @ptrCast(storage.save_directory.realpath(name, &buffer) catch @panic("Export error")));
+    path[path.len] = 0;
+    _ = image.exportToFile(path);
 }
 
 pub fn loaded(storage: *@This()) usize {
@@ -106,10 +106,6 @@ pub fn getImage(storage: *@This(), index: usize) error{OutOfRange}!?Image {
     storage.mutex.lock();
     defer {
         storage.mutex.unlock();
-        if (changed) {
-            log.info("Queue changed", .{});
-            storage.work_condition.signal();
-        }
     }
 
     // log.debug("{any}", .{storage.load_queue.items});

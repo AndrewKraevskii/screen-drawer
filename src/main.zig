@@ -137,7 +137,7 @@ pub fn main() !void {
                 const padding = rl.Vector2.init(50, 50);
                 const screen_size = rl.Vector2.init(@floatFromInt(width), @floatFromInt(height));
 
-                const images_on_one_row = 3;
+                const images_on_one_row = 8;
 
                 const texture_size = screen_size.subtract(padding).scale(1.0 / @as(f32, @floatFromInt(images_on_one_row))).subtract(padding);
                 const scale = texture_size.x / @as(f32, @floatFromInt(width));
