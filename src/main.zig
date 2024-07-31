@@ -1,6 +1,7 @@
 const std = @import("std");
 const rl = @import("raylib");
 const Allocator = std.mem.Allocator;
+const ImageStorage = @import("ImageStorage.zig");
 
 const app_name = "screen-drawer";
 
@@ -45,9 +46,6 @@ pub fn main() !void {
         .window_undecorated = true,
         .window_maximized = true,
     });
-    var not_saving = std.Thread.ResetEvent{};
-    defer not_saving.wait();
-    not_saving.set();
 
     rl.initWindow(0, 0, "Drawer");
     defer rl.closeWindow();
@@ -56,11 +54,12 @@ pub fn main() !void {
     const height: u31 = @intCast(rl.getScreenHeight());
     std.log.info("screen size {d}x{d}", .{ width, height });
 
-    var image_loader = ImageLoader.init(gpa);
+    const save_directory = try getAppDataDirEnsurePathExist(gpa, app_name);
+    defer gpa.free(save_directory);
+    var image_loader = try ImageStorage.init(gpa, save_directory);
     defer image_loader.deinit();
-    try image_loader.loadAllImages(app_name);
+    image_loader.startLoading();
 
-    var picture_name: []const u8 = "drawing.qoi";
     const line_thickness = 4;
     const wheel_target_size = 100;
 
@@ -71,22 +70,11 @@ pub fn main() !void {
         drawing_line: rl.Vector2,
         picking_color,
         view_all_images,
-    } = .idle;
+    } = .view_all_images;
+    var editing: ?usize = 0;
     var color: rl.Color = rl.Color.red;
     const canvas = rl.loadRenderTexture(width, height);
     defer canvas.unload();
-    {
-        canvas.begin();
-        rl.clearBackground(rl.Color.blank);
-        const first_image = image_loader.loaded_images.values()[0];
-        const texture = rl.loadTextureFromImage(first_image);
-        defer texture.unload();
-
-        rl.clearBackground(rl.Color.blank);
-        texture.draw(0, 0, rl.Color.white);
-        flushRaylib();
-        canvas.end();
-    }
 
     while (!rl.windowShouldClose() and rl.isWindowFocused()) {
         rl.beginDrawing();
@@ -110,7 +98,10 @@ pub fn main() !void {
                 color_wheel = .{ .center = mouse_pos, .size = 0 };
                 break :blk .picking_color;
             } else if (isPressed(key_bindings.view_all_images)) blk: {
-                try image_loader.updateImageWithTexture(picture_name, canvas.texture);
+                if (editing) |old_level| {
+                    std.log.info("Stored textue {?d}", .{editing});
+                    try image_loader.setTexture(old_level, canvas.texture);
+                }
                 break :blk .view_all_images;
             } else .idle,
 
@@ -151,9 +142,9 @@ pub fn main() !void {
                 const texture_size = screen_size.subtract(padding).scale(1.0 / @as(f32, @floatFromInt(images_on_one_row))).subtract(padding);
                 const scale = texture_size.x / @as(f32, @floatFromInt(width));
 
-                for (image_loader.loaded_images.values(), 0..) |image, index| {
-                    const texture = rl.loadTextureFromImage(image);
-                    defer texture.unload();
+                const num_of_images = image_loader.len();
+                for (0..num_of_images) |index| {
+                    const maybe_texture = try image_loader.getTexture(index);
                     const col = index % images_on_one_row;
                     const row = index / images_on_one_row;
                     const pos = padding.add(
@@ -161,7 +152,7 @@ pub fn main() !void {
                             .multiply(texture_size.add(padding.scale(2))),
                     );
 
-                    const actual_texture_size = rl.Vector2.init(@floatFromInt(image.width), @floatFromInt(image.height));
+                    const actual_texture_size = if (maybe_texture) |texture| rl.Vector2.init(@floatFromInt(texture.width), @floatFromInt(texture.height)) else texture_size;
 
                     const border_size = rl.Vector2{ .x = 10, .y = 10 };
                     const backdrop_size = actual_texture_size.scale(scale).add(border_size.scale(2));
@@ -179,12 +170,11 @@ pub fn main() !void {
                         rl.Color.gray;
 
                     if (rectanglePointColision(mouse_pos, backdrop_rect) and isPressed(key_bindings.confirm)) {
-                        const selected_file_name = image_loader.loaded_images.keys()[index];
-                        try exportCanvas(gpa, canvas.texture, picture_name, &not_saving);
-                        picture_name = selected_file_name;
+                        editing = index;
+                        std.log.info("Now editing {d} level", .{index});
                         canvas.begin();
                         rl.clearBackground(rl.Color.blank);
-                        texture.draw(0, 0, rl.Color.white);
+                        if (maybe_texture) |texture| texture.draw(0, 0, rl.Color.white);
                         canvas.end();
                         break :blk .idle;
                     }
@@ -192,7 +182,7 @@ pub fn main() !void {
                     rl.drawRectangleRec(backdrop_rect, rl.Color.black.alpha(0.6));
                     rl.drawRectangleLinesEx(backdrop_rect, 3, border_color);
 
-                    texture.drawEx(pos, 0, scale, rl.Color.white);
+                    if (maybe_texture) |t| t.drawEx(pos, 0, scale, rl.Color.white);
                     flushRaylib();
                 }
 
@@ -204,16 +194,6 @@ pub fn main() !void {
             _ = color_wheel.draw(mouse_pos);
         }
 
-        const saving_now = !not_saving.isSet();
-        if (isDown(key_bindings.save) and !saving_now) {
-            not_saving.reset();
-            try exportCanvas(gpa, canvas.texture, picture_name, &not_saving);
-        }
-
-        if (saving_now) {
-            rl.drawCircle(30, 30, 20, rl.Color.red);
-        }
-
         if (isDown(key_bindings.clear)) {
             canvas.begin();
             rl.clearBackground(rl.Color.blank);
@@ -223,60 +203,6 @@ pub fn main() !void {
 
         rl.endDrawing();
     }
-    not_saving.wait();
-    not_saving.reset();
-    try exportCanvas(gpa, canvas.texture, picture_name, &not_saving);
-}
-
-fn exportCanvas(alloc: Allocator, texture: rl.Texture, name: []const u8, saving: *std.Thread.ResetEvent) !void {
-    var buffer: [std.fs.max_path_bytes * 2]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&buffer);
-
-    const data_dir_path = try getAppDataDirEnsurePathExist(fba.allocator(), app_name);
-    const picture_path = try std.fs.path.joinZ(alloc, &.{ data_dir_path, name });
-
-    const screenshot = rl.loadImageFromTexture(texture);
-    std.log.info("Loaded image from texture", .{});
-
-    const thread = try std.Thread.spawn(.{
-        .allocator = std.heap.page_allocator,
-        .stack_size = 1024 * 1024,
-    }, struct {
-        pub fn foo(_alloc: Allocator, image: rl.Image, path: [:0]const u8, cond: *std.Thread.ResetEvent) void {
-            const is_saved = rl.exportImage(image, path);
-            if (is_saved)
-                std.log.info("Written image to {s}", .{path})
-            else
-                std.log.err("Failed to write {s}", .{path});
-            image.unload();
-            _alloc.free(path);
-            cond.set();
-        }
-    }.foo, .{ alloc, screenshot, picture_path, saving });
-    _ = thread.detach();
-}
-
-fn loadCanvas(name: []const u8) !rl.Texture {
-    var buffer: [std.fs.max_path_bytes * 2]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&buffer);
-    const alloc = fba.allocator();
-
-    const data_dir_path = try getAppDataDirEnsurePathExist(alloc, app_name);
-    const picture_path = try std.fs.path.joinZ(alloc, &.{ data_dir_path, name });
-
-    const image = rl.loadImage(picture_path);
-    defer image.unload();
-    return rl.Texture.fromImage(image);
-}
-
-pub fn getAppDataDirEnsurePathExist(alloc: Allocator, appname: []const u8) ![]u8 {
-    const data_dir_path = try std.fs.getAppDataDir(alloc, appname);
-
-    std.fs.makeDirAbsolute(data_dir_path) catch |e| switch (e) {
-        error.PathAlreadyExists => {},
-        else => |err| return err,
-    };
-    return data_dir_path;
 }
 
 const ColorWheel = struct {
@@ -377,84 +303,6 @@ fn isModifierKey(key: rl.KeyboardKey) bool {
     };
 }
 
-const ImageLoader = struct {
-    loaded_images: std.StringArrayHashMapUnmanaged(rl.Image),
-    alloc: Allocator,
-
-    pub fn init(alloc: Allocator) ImageLoader {
-        return .{
-            .loaded_images = .{},
-            .alloc = alloc,
-        };
-    }
-
-    pub fn updateImageWithTexture(loader: *ImageLoader, file_name: []const u8, texture: rl.Texture) !void {
-        const image = rl.Image.fromTexture(texture);
-        const gop = try loader.loaded_images.getOrPut(loader.alloc, file_name);
-        if (gop.found_existing) {
-            gop.value_ptr.unload();
-        }
-        gop.value_ptr.* = image;
-        try loader.exportImage(file_name);
-    }
-
-    pub fn loadAllImages(loader: *ImageLoader, data_dir_name: []const u8) !void {
-        var buffer: [std.fs.max_path_bytes * 2]u8 = undefined;
-        var fba = std.heap.FixedBufferAllocator.init(&buffer);
-        defer std.debug.assert(fba.end_index == 0);
-        const alloc = fba.allocator();
-
-        const data_dir_path = try getAppDataDirEnsurePathExist(alloc, data_dir_name);
-        defer alloc.free(data_dir_path);
-
-        const data_dir = try std.fs.openDirAbsolute(data_dir_path, .{
-            .iterate = true,
-            .no_follow = true,
-        });
-        var it = data_dir.iterate();
-        while (try it.next()) |entry| {
-            const picture_path = try std.fs.path.joinZ(alloc, &.{ data_dir_path, entry.name });
-            defer alloc.free(picture_path);
-            try loader.loadImage(picture_path);
-        }
-    }
-
-    pub fn loadImage(loader: *ImageLoader, full_path: [:0]const u8) !void {
-        const image = rl.loadImage(full_path);
-        const basename = try loader.alloc.dupe(u8, std.fs.path.basename(full_path));
-        errdefer loader.alloc.free(basename);
-        try loader.loaded_images.put(loader.alloc, basename, image);
-    }
-
-    pub fn exportImage(loader: *ImageLoader, name: []const u8) !void {
-        var buffer: [std.fs.max_path_bytes * 2]u8 = undefined;
-        var fba = std.heap.FixedBufferAllocator.init(&buffer);
-
-        const data_dir_path = try getAppDataDirEnsurePathExist(fba.allocator(), app_name);
-        const picture_path = try std.fs.path.joinZ(fba.allocator(), &.{ data_dir_path, name });
-
-        std.log.info("Loaded image from texture", .{});
-
-        const image = loader.loaded_images.get(name) orelse {
-            return error.ImageNotFound;
-        };
-
-        const is_saved = rl.exportImage(image, picture_path);
-        if (is_saved)
-            std.log.info("Written image to {s}", .{picture_path})
-        else
-            std.log.err("Failed to write {s}", .{picture_path});
-    }
-
-    pub fn deinit(loader: *ImageLoader) void {
-        for (loader.loaded_images.keys(), loader.loaded_images.values()) |key, value| {
-            loader.alloc.free(key);
-            value.unload();
-        }
-        loader.loaded_images.deinit(loader.alloc);
-    }
-};
-
 fn rectanglePointColision(point: rl.Vector2, rect: rl.Rectangle) bool {
     return point.x >= rect.x and point.y > rect.y and
         point.x < rect.x + rect.width and point.y < rect.y + rect.height;
@@ -463,4 +311,14 @@ fn rectanglePointColision(point: rl.Vector2, rect: rl.Rectangle) bool {
 fn flushRaylib() void {
     rl.beginMode2D(std.mem.zeroes(rl.Camera2D));
     rl.endMode2D();
+}
+
+fn getAppDataDirEnsurePathExist(alloc: Allocator, appname: []const u8) ![]u8 {
+    const data_dir_path = try std.fs.getAppDataDir(alloc, appname);
+
+    std.fs.makeDirAbsolute(data_dir_path) catch |e| switch (e) {
+        error.PathAlreadyExists => {},
+        else => |err| return err,
+    };
+    return data_dir_path;
 }
