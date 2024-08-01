@@ -8,7 +8,7 @@ gpa: Allocator,
 save_directory: std.fs.Dir,
 images: Storage,
 
-thread_pool: std.Thread.Pool,
+thread_pool: *std.Thread.Pool,
 mutex: std.Thread.Mutex,
 
 const Storage = std.StringArrayHashMapUnmanaged(ImageData);
@@ -29,6 +29,7 @@ const ImageData = struct {
 
 pub fn init(
     gpa: Allocator,
+    thead_pool: *std.Thread.Pool,
     save_path: []const u8,
 ) !@This() {
     var dir = try std.fs.openDirAbsolute(save_path, .{
@@ -45,18 +46,12 @@ pub fn init(
     }
 
     return .{
-        .thread_pool = undefined,
+        .thread_pool = thead_pool,
         .gpa = gpa,
         .images = images,
         .save_directory = dir,
         .mutex = .{},
     };
-}
-
-pub fn startLoading(storage: *@This()) !void {
-    try storage.thread_pool.init(.{
-        .allocator = storage.gpa,
-    });
 }
 
 pub fn deinit(storage: *@This()) void {
@@ -77,7 +72,6 @@ pub fn deinit(storage: *@This()) void {
 
         storage.save_directory.close();
     }
-    storage.thread_pool.deinit();
 }
 
 fn flushFilesOnDisc(storage: *@This()) void {
@@ -101,17 +95,6 @@ fn flushFileOnDisc(storage: *@This(), name: []const u8, image: rl.Image) void {
     log.info("saved {s}", .{path});
 }
 
-pub fn loaded(storage: *@This()) usize {
-    storage.mutex.lock();
-    defer storage.mutex.unlock();
-
-    var counter: usize = 0;
-    for (storage.images.entries.items(.value)) |image| {
-        if (image != null) counter += 1;
-    }
-    return counter;
-}
-
 pub fn len(storage: *@This()) usize {
     return storage.images.entries.len;
 }
@@ -132,7 +115,8 @@ pub fn getImage(storage: *@This(), index: usize) ?rl.Image {
 }
 
 pub fn setTexture(storage: *@This(), index: usize, texture: rl.Texture) !void {
-    const new_image = rl.Image.fromTexture(texture);
+    var new_image = rl.Image.fromTexture(texture);
+    new_image.flipVertical();
 
     storage.mutex.lock();
     defer storage.mutex.unlock();

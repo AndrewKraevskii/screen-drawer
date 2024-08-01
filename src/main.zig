@@ -3,7 +3,7 @@ const rl = @import("raylib");
 const Allocator = std.mem.Allocator;
 const ImageStorage = @import("ImageStorage.zig");
 
-const app_name = "screen-drawer";
+pub const app_name = "screen-drawer";
 
 const key_bindings = struct {
     // zig fmt: off
@@ -45,6 +45,7 @@ pub fn main() !void {
         .window_transparent = true,
         .window_undecorated = true,
         .window_maximized = true,
+        .vsync_hint = true,
     });
 
     rl.initWindow(0, 0, "Drawer");
@@ -56,9 +57,16 @@ pub fn main() !void {
 
     const save_directory = try getAppDataDirEnsurePathExist(gpa, app_name);
     defer gpa.free(save_directory);
-    var image_loader = try ImageStorage.init(gpa, save_directory);
+
+    var thread_pool: std.Thread.Pool = undefined;
+    try thread_pool.init(.{
+        .allocator = gpa,
+        // .n_jobs = 1,
+    });
+    defer thread_pool.deinit();
+
+    var image_loader = try ImageStorage.init(gpa, &thread_pool, save_directory);
     defer image_loader.deinit();
-    try image_loader.startLoading();
 
     const line_thickness = 4;
     const wheel_target_size = 100;
@@ -85,8 +93,8 @@ pub fn main() !void {
         const mouse_pos = rl.getMousePosition();
 
         switch (std.math.order(rl.getMouseWheelMoveV().y, 0.0)) {
-            .gt => scrolling_position += 1,
-            .lt => scrolling_position -|= 1,
+            .lt => scrolling_position += 1,
+            .gt => scrolling_position -|= 1,
             .eq => {},
         }
 
@@ -217,9 +225,11 @@ pub fn main() !void {
         }
         rl.drawCircleV(mouse_pos, line_thickness * 2, color);
 
-        rl.drawFPS(0, 0);
+        if (@import("builtin").mode == .Debug)
+            rl.drawFPS(0, 0);
         rl.endDrawing();
     }
+
     if (editing) |level| {
         std.log.info("Stored texture {?d}", .{level});
         try image_loader.setTexture(level, canvas.texture);
@@ -342,4 +352,8 @@ fn getAppDataDirEnsurePathExist(alloc: Allocator, appname: []const u8) ![]u8 {
         else => |err| return err,
     };
     return data_dir_path;
+}
+
+test {
+    _ = std.testing.refAllDecls(@This());
 }
