@@ -86,7 +86,7 @@ pub fn main() !void {
                 .x = 0,
                 .y = 0,
                 .width = @as(f32, @floatFromInt(canvas.texture.width)),
-                .height = -@as(f32, @floatFromInt(canvas.texture.height)), // negative to flip image verticaly
+                .height = -@as(f32, @floatFromInt(canvas.texture.height)), // negative to flip image vertically
             }, rl.Vector2.zero(), rl.Color.white);
 
         drawing_state = switch (drawing_state) {
@@ -99,7 +99,7 @@ pub fn main() !void {
                 break :blk .picking_color;
             } else if (isPressed(key_bindings.view_all_images)) blk: {
                 if (editing) |old_level| {
-                    std.log.info("Stored textue {?d}", .{editing});
+                    std.log.info("Stored texture {?d}", .{editing});
                     try image_loader.setTexture(old_level, canvas.texture);
                 }
                 break :blk .view_all_images;
@@ -144,12 +144,12 @@ pub fn main() !void {
 
                 const num_of_images = image_loader.len();
                 for (0..num_of_images) |index| {
-                    const maybe_texture = try image_loader.getTexture(index);
+                    const maybe_texture = image_loader.getTexture(index);
                     const col = index % images_on_one_row;
                     const row = index / images_on_one_row;
                     const pos = padding.add(
                         rl.Vector2.init(@floatFromInt(col), @floatFromInt(row))
-                            .multiply(texture_size.add(padding.scale(2))),
+                            .multiply(texture_size.add(padding)),
                     );
 
                     const actual_texture_size = if (maybe_texture) |texture| rl.Vector2.init(@floatFromInt(texture.width), @floatFromInt(texture.height)) else texture_size;
@@ -164,12 +164,12 @@ pub fn main() !void {
                         .height = backdrop_size.y,
                     };
 
-                    const border_color = if (rectanglePointColision(mouse_pos, backdrop_rect))
+                    const border_color = if (rectanglePointCollision(mouse_pos, backdrop_rect))
                         rl.Color.light_gray
                     else
                         rl.Color.gray;
 
-                    if (rectanglePointColision(mouse_pos, backdrop_rect) and isPressed(key_bindings.confirm)) {
+                    if (rectanglePointCollision(mouse_pos, backdrop_rect) and isPressed(key_bindings.confirm)) {
                         editing = index;
                         std.log.info("Now editing {d} level", .{index});
                         canvas.begin();
@@ -204,6 +204,10 @@ pub fn main() !void {
         rl.drawFPS(0, 0);
         rl.endDrawing();
     }
+    if (editing) |level| {
+        std.log.info("Stored texture {?d}", .{level});
+        try image_loader.setTexture(level, canvas.texture);
+    }
 }
 
 const ColorWheel = struct {
@@ -236,7 +240,7 @@ fn drawNiceLine(start: rl.Vector2, end: rl.Vector2, thickness: f32, color: rl.Co
 }
 
 fn projectToClosestLine(start: rl.Vector2, end: rl.Vector2) rl.Vector2 {
-    const horisontal = rl.Vector2{
+    const horizontal = rl.Vector2{
         .x = end.x,
         .y = start.y,
     };
@@ -244,7 +248,7 @@ fn projectToClosestLine(start: rl.Vector2, end: rl.Vector2) rl.Vector2 {
         .x = start.x,
         .y = end.y,
     };
-    return if (start.subtract(horisontal).lengthSqr() > start.subtract(vertical).lengthSqr()) horisontal else vertical;
+    return if (start.subtract(horizontal).lengthSqr() > start.subtract(vertical).lengthSqr()) horizontal else vertical;
 }
 
 fn getColorHash(value: anytype) rl.Color {
@@ -304,7 +308,7 @@ fn isModifierKey(key: rl.KeyboardKey) bool {
     };
 }
 
-fn rectanglePointColision(point: rl.Vector2, rect: rl.Rectangle) bool {
+fn rectanglePointCollision(point: rl.Vector2, rect: rl.Rectangle) bool {
     return point.x >= rect.x and point.y > rect.y and
         point.x < rect.x + rect.width and point.y < rect.y + rect.height;
 }
