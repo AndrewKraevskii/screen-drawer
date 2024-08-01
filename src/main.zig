@@ -76,11 +76,20 @@ pub fn main() !void {
     const canvas = rl.loadRenderTexture(width, height);
     defer canvas.unload();
 
+    var scrolling_position: usize = 0;
+
     while (!rl.windowShouldClose() and rl.isWindowFocused()) {
         rl.beginDrawing();
         rl.clearBackground(rl.Color.blank);
 
         const mouse_pos = rl.getMousePosition();
+
+        switch (std.math.order(rl.getMouseWheelMoveV().y, 0.0)) {
+            .gt => scrolling_position += 1,
+            .lt => scrolling_position -|= 1,
+            .eq => {},
+        }
+
         if (drawing_state != .view_all_images)
             rl.drawTextureRec(canvas.texture, .{
                 .x = 0,
@@ -137,16 +146,23 @@ pub fn main() !void {
                 const padding = rl.Vector2.init(50, 50);
                 const screen_size = rl.Vector2.init(@floatFromInt(width), @floatFromInt(height));
 
-                const images_on_one_row = 8;
+                const images_on_one_row = 4;
 
                 const texture_size = screen_size.subtract(padding).scale(1.0 / @as(f32, @floatFromInt(images_on_one_row))).subtract(padding);
                 const scale = texture_size.x / @as(f32, @floatFromInt(width));
 
+                var start_image = scrolling_position * images_on_one_row;
                 const num_of_images = image_loader.len();
-                for (0..num_of_images) |index| {
+
+                if (start_image > num_of_images) {
+                    scrolling_position = @divFloor(num_of_images, images_on_one_row);
+                    start_image = scrolling_position * images_on_one_row;
+                }
+
+                for (start_image..num_of_images) |index| {
                     const maybe_texture = image_loader.getTexture(index);
                     const col = index % images_on_one_row;
-                    const row = index / images_on_one_row;
+                    const row = (index / images_on_one_row) - scrolling_position;
                     const pos = padding.add(
                         rl.Vector2.init(@floatFromInt(col), @floatFromInt(row))
                             .multiply(texture_size.add(padding)),
