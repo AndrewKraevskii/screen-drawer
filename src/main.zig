@@ -3,10 +3,11 @@ const rl = @import("raylib");
 const Allocator = std.mem.Allocator;
 const ImageStorage = @import("ImageStorage.zig");
 
-pub const app_name = "screen-drawer";
+const config = struct {
+    pub const app_name = "screen-drawer";
 
-const key_bindings = struct {
-    // zig fmt: off
+    const key_bindings = struct {
+        // zig fmt: off
     pub const draw            = .{ rl.MouseButton.mouse_button_left };
     pub const confirm         = .{ rl.MouseButton.mouse_button_left };
     pub const draw_line       = .{ rl.MouseButton.mouse_button_right };
@@ -15,21 +16,25 @@ const key_bindings = struct {
     pub const clear           = .{ rl.KeyboardKey.key_c };
 
     pub const view_all_images = .{ rl.KeyboardKey.key_left_bracket };
+    pub const new_canvas = .{ rl.KeyboardKey.key_n };
     // zig fmt: on
 
-    comptime {
-        for (@typeInfo(@This()).Struct.decls) |decl| {
-            for (@field(key_bindings, decl.name), 0..) |key, index| {
-                if (@TypeOf(key) == rl.MouseButton or @TypeOf(key) == rl.KeyboardKey) continue;
-                @compileError("Key bindings should include rl.MouseButton or rl.KeyboardKey found: " ++
-                    @typeName(@TypeOf(key)) ++ std.fmt.comptimePrint(" on position {d} in", .{index}) ++ decl.name);
+        comptime {
+            for (@typeInfo(@This()).Struct.decls) |decl| {
+                for (@field(key_bindings, decl.name), 0..) |key, index| {
+                    if (@TypeOf(key) == rl.MouseButton or @TypeOf(key) == rl.KeyboardKey) continue;
+                    @compileError("Key bindings should include rl.MouseButton or rl.KeyboardKey found: " ++
+                        @typeName(@TypeOf(key)) ++ std.fmt.comptimePrint(" on position {d} in", .{index}) ++ decl.name);
+                }
             }
         }
-    }
-};
+    };
 
-/// Set to std.math.inf(f32) to disable animations.
-const animation_speed = 10;
+    /// Set to std.math.inf(f32) to disable animations.
+    const animation_speed = 10;
+
+    const hide_cursor = true;
+};
 
 pub const std_options = std.Options{
     .log_level = .debug,
@@ -49,19 +54,22 @@ pub fn main() !void {
     });
 
     rl.initWindow(0, 0, "Drawer");
+
+    if (config.hide_cursor)
+        rl.hideCursor();
     defer rl.closeWindow();
 
     const width: u31 = @intCast(rl.getScreenWidth());
     const height: u31 = @intCast(rl.getScreenHeight());
     std.log.info("screen size {d}x{d}", .{ width, height });
 
-    const save_directory = try getAppDataDirEnsurePathExist(gpa, app_name);
+    const save_directory = try getAppDataDirEnsurePathExist(gpa, config.app_name);
     defer gpa.free(save_directory);
 
     var thread_pool: std.Thread.Pool = undefined;
     try thread_pool.init(.{
         .allocator = gpa,
-        // .n_jobs = 1,
+        .n_jobs = 1,
     });
     defer thread_pool.deinit();
 
@@ -79,7 +87,7 @@ pub fn main() !void {
         picking_color,
         view_all_images,
     } = .view_all_images;
-    var editing: ?usize = 0;
+    var editing: ?usize = null;
     var color: rl.Color = rl.Color.red;
     const canvas = rl.loadRenderTexture(width, height);
     defer canvas.unload();
@@ -107,17 +115,21 @@ pub fn main() !void {
             }, rl.Vector2.zero(), rl.Color.white);
 
         drawing_state = switch (drawing_state) {
-            .idle => if (isDown(key_bindings.draw))
+            .idle => if (isDown(config.key_bindings.draw))
                 .{ .drawing = mouse_pos }
-            else if (isDown(key_bindings.draw_line))
+            else if (isDown(config.key_bindings.draw_line))
                 .{ .drawing_line = mouse_pos }
-            else if (isPressed(key_bindings.picking_color)) blk: {
+            else if (isPressed(config.key_bindings.picking_color)) blk: {
                 color_wheel = .{ .center = mouse_pos, .size = 0 };
                 break :blk .picking_color;
-            } else if (isPressed(key_bindings.view_all_images)) blk: {
+            } else if (isPressed(config.key_bindings.view_all_images)) blk: {
                 if (editing) |old_level| {
                     std.log.info("Stored texture {?d}", .{editing});
                     try image_loader.setTexture(old_level, canvas.texture);
+                    canvas.begin();
+                    rl.clearBackground(rl.Color.blank);
+                    canvas.end();
+                    editing = null;
                 }
                 break :blk .view_all_images;
             } else .idle,
@@ -126,14 +138,14 @@ pub fn main() !void {
                 canvas.begin();
                 rl.drawLineEx(old_position, mouse_pos, line_thickness, color);
                 canvas.end();
-                break :blk if (isDown(key_bindings.draw))
+                break :blk if (isDown(config.key_bindings.draw))
                     .{ .drawing = mouse_pos }
                 else
                     .idle;
             },
             .drawing_line => |old_position| blk: {
                 drawNiceLine(old_position, mouse_pos, line_thickness, color);
-                if (!isDown(key_bindings.draw_line)) {
+                if (!isDown(config.key_bindings.draw_line)) {
                     canvas.begin();
                     drawNiceLine(old_position, mouse_pos, line_thickness, color);
                     canvas.end();
@@ -143,14 +155,17 @@ pub fn main() !void {
             },
             .picking_color => blk: {
                 color = color_wheel.draw(mouse_pos);
-                break :blk if (isPressed(key_bindings.picking_color))
+                break :blk if (isPressed(config.key_bindings.picking_color))
                     .idle
                 else {
-                    color_wheel.size = expDecay(color_wheel.size, wheel_target_size, animation_speed, rl.getFrameTime());
+                    color_wheel.size = expDecay(color_wheel.size, wheel_target_size, config.animation_speed, rl.getFrameTime());
                     break :blk .picking_color;
                 };
             },
             .view_all_images => blk: {
+                if (isPressed(config.key_bindings.new_canvas)) {
+                    try image_loader.addTexture(canvas.texture);
+                }
                 const padding = rl.Vector2.init(50, 50);
                 const screen_size = rl.Vector2.init(@floatFromInt(width), @floatFromInt(height));
 
@@ -167,7 +182,8 @@ pub fn main() !void {
                     start_image = scrolling_position * images_on_one_row;
                 }
 
-                for (start_image..num_of_images) |index| {
+                const images_to_display = images_on_one_row * images_on_one_row;
+                for (start_image..@min(start_image + images_to_display, num_of_images)) |index| {
                     const maybe_texture = image_loader.getTexture(index);
                     const col = index % images_on_one_row;
                     const row = (index / images_on_one_row) - scrolling_position;
@@ -193,7 +209,7 @@ pub fn main() !void {
                     else
                         rl.Color.gray;
 
-                    if (rectanglePointCollision(mouse_pos, backdrop_rect) and isPressed(key_bindings.confirm)) {
+                    if (rectanglePointCollision(mouse_pos, backdrop_rect) and isPressed(config.key_bindings.confirm)) {
                         editing = index;
                         std.log.info("Now editing {d} level", .{index});
                         canvas.begin();
@@ -214,11 +230,11 @@ pub fn main() !void {
             },
         };
         if (drawing_state != .picking_color) {
-            color_wheel.size = expDecay(color_wheel.size, 0, animation_speed, rl.getFrameTime());
+            color_wheel.size = expDecay(color_wheel.size, 0, config.animation_speed, rl.getFrameTime());
             _ = color_wheel.draw(mouse_pos);
         }
 
-        if (isDown(key_bindings.clear)) {
+        if (isDown(config.key_bindings.clear)) {
             canvas.begin();
             rl.clearBackground(rl.Color.blank);
             canvas.end();
@@ -231,7 +247,7 @@ pub fn main() !void {
     }
 
     if (editing) |level| {
-        std.log.info("Stored texture {?d}", .{level});
+        std.log.info("Stored texture {d}", .{level});
         try image_loader.setTexture(level, canvas.texture);
     }
 }
