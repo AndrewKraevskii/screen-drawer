@@ -8,16 +8,17 @@ const config = struct {
 
     const key_bindings = struct {
         // zig fmt: off
-    pub const draw            = .{ rl.MouseButton.mouse_button_left };
-    pub const confirm         = .{ rl.MouseButton.mouse_button_left };
-    pub const draw_line       = .{ rl.MouseButton.mouse_button_right };
-    pub const picking_color   = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
-    pub const save            = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_s };
-    pub const clear           = .{ rl.KeyboardKey.key_c };
-
-    pub const view_all_images = .{ rl.KeyboardKey.key_left_bracket };
-    pub const new_canvas = .{ rl.KeyboardKey.key_n };
-    // zig fmt: on
+        pub const draw          = .{ rl.MouseButton.mouse_button_left };
+        pub const confirm       = .{ rl.MouseButton.mouse_button_left };
+        pub const draw_line     = .{ rl.MouseButton.mouse_button_right };
+        pub const picking_color = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
+        pub const clear         = .{ rl.KeyboardKey.key_right_bracket };
+        pub const scroll_up     = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
+        pub const scroll_down     = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };
+        
+        pub const view_all_images = .{rl.KeyboardKey.key_left_bracket};
+        pub const new_canvas = .{rl.KeyboardKey.key_n};
+        // zig fmt: on
 
         comptime {
             for (@typeInfo(@This()).Struct.decls) |decl| {
@@ -61,7 +62,6 @@ pub fn main() !void {
 
     const width: u31 = @intCast(rl.getScreenWidth());
     const height: u31 = @intCast(rl.getScreenHeight());
-    std.log.info("screen size {d}x{d}", .{ width, height });
 
     const save_directory = try getAppDataDirEnsurePathExist(gpa, config.app_name);
     defer gpa.free(save_directory);
@@ -92,7 +92,7 @@ pub fn main() !void {
     const canvas = rl.loadRenderTexture(width, height);
     defer canvas.unload();
 
-    var target_scrolling_position: i64 = 0;
+    var target_scrolling_position: i32 = 0;
     var scrolling_position: f32 = 0;
 
     while (!rl.windowShouldClose() and rl.isWindowFocused()) {
@@ -101,7 +101,12 @@ pub fn main() !void {
 
         const mouse_pos = rl.getMousePosition();
 
-        switch (std.math.order(rl.getMouseWheelMoveV().y, 0.0)) {
+        const mouse_scroll = switch (std.math.order(rl.getMouseWheelMoveV().y, 0.0)) {
+            .eq => if (isPressed(config.key_bindings.scroll_up)) std.math.Order.gt else if (isPressed(config.key_bindings.scroll_down)) std.math.Order.lt else std.math.Order.eq,
+            else => |other| other,
+        };
+
+        switch (mouse_scroll) {
             .lt => target_scrolling_position += 1,
             .gt => target_scrolling_position -|= 1,
             .eq => {},
