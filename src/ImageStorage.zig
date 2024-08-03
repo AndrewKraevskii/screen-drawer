@@ -26,6 +26,12 @@ const ImageData = struct {
 
     image: ?rl.Image = null,
     texture: ?rl.Texture = null,
+
+    pub fn deinit(self: *@This(), alloc: Allocator) void {
+        alloc.free(self.file_name);
+        if (self.image) |image| image.unload();
+        if (self.texture) |texture| texture.unload();
+    }
 };
 
 pub fn init(
@@ -70,11 +76,9 @@ pub fn deinit(storage: *@This()) void {
 
         storage.flushFilesOnDisc();
 
-        for (storage.images.items) |item| {
+        for (storage.images.items) |*item| {
             std.debug.assert(item.dirty == false);
-            storage.gpa.free(item.file_name);
-            if (item.image) |image| image.unload();
-            if (item.texture) |texture| texture.unload();
+            item.deinit(storage.gpa);
         }
         storage.images.deinit(storage.gpa);
 
@@ -149,6 +153,20 @@ pub fn addTexture(storage: *@This(), texture: rl.Texture) !void {
             return std.mem.lessThan(u8, l.file_name, r.file_name);
         }
     }.lessThan));
+}
+
+pub fn remove(storage: *@This(), index: usize) !void {
+    storage.mutex.lock();
+    defer storage.mutex.unlock();
+    if (storage.images.items[index].processing == .loading) {
+        return;
+    }
+    var image = storage.images.orderedRemove(index);
+    storage.save_directory.deleteFile(image.file_name) catch |e| switch (e) {
+        error.FileNotFound => {},
+        else => return e,
+    };
+    image.deinit(storage.gpa);
 }
 
 pub fn setTexture(storage: *@This(), index: usize, texture: rl.Texture) !void {

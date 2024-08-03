@@ -175,7 +175,7 @@ pub fn main() !void {
                 const scale = texture_size.x / @as(f32, @floatFromInt(width));
 
                 var start_image = scrolling_position * images_on_one_row;
-                const num_of_images = image_loader.len();
+                const num_of_images = image_loader.images.items.len;
 
                 if (start_image > num_of_images) {
                     scrolling_position = @divFloor(num_of_images, images_on_one_row);
@@ -183,7 +183,8 @@ pub fn main() !void {
                 }
 
                 const images_to_display = images_on_one_row * images_on_one_row;
-                for (start_image..@min(start_image + images_to_display, num_of_images)) |index| {
+                var index: usize = start_image;
+                while (index < @min(start_image + images_to_display, image_loader.images.items.len)) : (index += 1) {
                     const maybe_texture = image_loader.getTexture(index);
                     const col = index % images_on_one_row;
                     const row = (index / images_on_one_row) - scrolling_position;
@@ -204,10 +205,25 @@ pub fn main() !void {
                         .height = backdrop_size.y,
                     };
 
+                    const cross_size = 20;
+                    const cross_rectangle = rl.Rectangle{
+                        .x = backdrop_pos.x + backdrop_size.x - cross_size,
+                        .y = backdrop_pos.y,
+                        .width = cross_size,
+                        .height = cross_size,
+                    };
+
+                    if (rectanglePointCollision(mouse_pos, cross_rectangle) and isPressed(config.key_bindings.confirm)) {
+                        try image_loader.remove(index);
+                        continue;
+                    }
+
                     const border_color = if (rectanglePointCollision(mouse_pos, backdrop_rect))
                         rl.Color.light_gray
                     else
                         rl.Color.gray;
+
+                    // backdrop_pos.add(backdrop_size);
 
                     if (rectanglePointCollision(mouse_pos, backdrop_rect) and isPressed(config.key_bindings.confirm)) {
                         editing = index;
@@ -223,6 +239,24 @@ pub fn main() !void {
                     rl.drawRectangleLinesEx(backdrop_rect, 3, border_color);
 
                     if (maybe_texture) |t| t.drawEx(pos, 0, scale, rl.Color.white);
+                    {
+                        rl.drawRectangleRec(cross_rectangle, rl.Color.red);
+                        const thickness = 3;
+                        rl.drawLineEx(.{
+                            .x = cross_rectangle.x,
+                            .y = cross_rectangle.y,
+                        }, .{
+                            .x = cross_rectangle.x + cross_size,
+                            .y = cross_rectangle.y + cross_size,
+                        }, thickness, rl.Color.black);
+                        rl.drawLineEx(.{
+                            .x = cross_rectangle.x + cross_size,
+                            .y = cross_rectangle.y,
+                        }, .{
+                            .x = cross_rectangle.x,
+                            .y = cross_rectangle.y + cross_size,
+                        }, thickness, rl.Color.black);
+                    }
                     flushRaylib();
                 }
 
