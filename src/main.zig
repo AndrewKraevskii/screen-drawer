@@ -9,12 +9,13 @@ const config = struct {
     const key_bindings = struct {
         // zig fmt: off
         pub const draw          = .{ rl.MouseButton.mouse_button_left };
-        pub const confirm       = .{ rl.MouseButton.mouse_button_left };
+        pub const eraser        = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };       
         pub const draw_line     = .{ rl.MouseButton.mouse_button_right };
+        pub const confirm       = .{ rl.MouseButton.mouse_button_left };
         pub const picking_color = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
         pub const clear         = .{ rl.KeyboardKey.key_right_bracket };
         pub const scroll_up     = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
-        pub const scroll_down     = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };
+        pub const scroll_down   = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };
         
         pub const view_all_images = .{rl.KeyboardKey.key_left_bracket};
         pub const new_canvas = .{rl.KeyboardKey.key_n};
@@ -37,8 +38,10 @@ const config = struct {
     const hide_cursor = true;
 };
 
+const is_debug = @import("builtin").mode == .Debug;
+
 pub const std_options = std.Options{
-    .log_level = .debug,
+    .log_level = if (is_debug) .debug else .warn,
 };
 
 pub fn main() !void {
@@ -53,6 +56,8 @@ pub fn main() !void {
         .window_maximized = true,
         .vsync_hint = true,
     });
+
+    rl.setTraceLogLevel(if (is_debug) .log_debug else .log_warning);
 
     rl.initWindow(0, 0, "Drawer");
 
@@ -82,8 +87,9 @@ pub fn main() !void {
     var color_wheel: ColorWheel = .{ .center = rl.Vector2.zero(), .size = 0 };
     var drawing_state: union(enum) {
         idle,
-        drawing: rl.Vector2,
-        drawing_line: rl.Vector2,
+        drawing,
+        drawing_line,
+        eraser,
         picking_color,
         view_all_images,
     } = .view_all_images;
@@ -95,11 +101,14 @@ pub fn main() !void {
     var target_scrolling_position: i32 = 0;
     var scrolling_position: f32 = 0;
 
+    var old_mouse_position = rl.getMousePosition();
+
     while (!rl.windowShouldClose() and rl.isWindowFocused()) {
         rl.beginDrawing();
         rl.clearBackground(rl.Color.blank);
 
-        const mouse_pos = rl.getMousePosition();
+        const mouse_position = rl.getMousePosition();
+        defer old_mouse_position = mouse_position;
 
         const mouse_scroll = switch (std.math.order(rl.getMouseWheelMoveV().y, 0.0)) {
             .eq => if (isPressed(config.key_bindings.scroll_up)) std.math.Order.gt else if (isPressed(config.key_bindings.scroll_down)) std.math.Order.lt else std.math.Order.eq,
@@ -124,11 +133,13 @@ pub fn main() !void {
 
         drawing_state = switch (drawing_state) {
             .idle => if (isDown(config.key_bindings.draw))
-                .{ .drawing = mouse_pos }
+                .drawing
             else if (isDown(config.key_bindings.draw_line))
-                .{ .drawing_line = mouse_pos }
+                .drawing_line
+            else if (isDown(config.key_bindings.eraser))
+                .eraser
             else if (isPressed(config.key_bindings.picking_color)) blk: {
-                color_wheel = .{ .center = mouse_pos, .size = 0 };
+                color_wheel = .{ .center = mouse_position, .size = 0 };
                 break :blk .picking_color;
             } else if (isPressed(config.key_bindings.view_all_images)) blk: {
                 if (editing) |old_level| {
@@ -141,28 +152,66 @@ pub fn main() !void {
                 }
                 break :blk .view_all_images;
             } else .idle,
-
-            .drawing => |old_position| blk: {
+            .drawing => blk: {
                 canvas.begin();
-                rl.drawLineEx(old_position, mouse_pos, line_thickness, color);
+                rl.drawLineEx(old_mouse_position, mouse_position, line_thickness, color);
                 canvas.end();
                 break :blk if (isDown(config.key_bindings.draw))
-                    .{ .drawing = mouse_pos }
+                    .drawing
                 else
                     .idle;
             },
-            .drawing_line => |old_position| blk: {
-                drawNiceLine(old_position, mouse_pos, line_thickness, color);
+            .eraser => blk: {
+                const thickness = 20;
+                const radius = thickness / 2;
+                canvas.begin();
+
+                {
+                    rl.drawCircleV(old_mouse_position, radius, rl.Color.white);
+
+                    rl.beginBlendMode(.blend_subtract_colors);
+                    rl.gl.rlSetBlendFactors(0, 0, 0);
+                    {
+                        rl.drawCircleV(old_mouse_position, radius, rl.Color.white);
+                    }
+                    rl.endBlendMode();
+                }
+                {
+                    rl.drawCircleV(mouse_position, radius, rl.Color.white);
+
+                    rl.beginBlendMode(.blend_subtract_colors);
+                    rl.gl.rlSetBlendFactors(0, 0, 0);
+                    {
+                        rl.drawCircleV(mouse_position, radius, rl.Color.white);
+                    }
+                    rl.endBlendMode();
+                }
+                {
+                    rl.drawLineEx(old_mouse_position, mouse_position, thickness, color);
+
+                    rl.beginBlendMode(.blend_subtract_colors);
+                    rl.gl.rlSetBlendFactors(0, 0, 0);
+                    {
+                        rl.drawLineEx(old_mouse_position, mouse_position, thickness, color);
+                    }
+                    rl.endBlendMode();
+                }
+                canvas.end();
+
+                break :blk if (isDown(config.key_bindings.eraser)) .eraser else .idle;
+            },
+            .drawing_line => blk: {
+                drawNiceLine(old_mouse_position, mouse_position, line_thickness, color);
                 if (!isDown(config.key_bindings.draw_line)) {
                     canvas.begin();
-                    drawNiceLine(old_position, mouse_pos, line_thickness, color);
+                    drawNiceLine(old_mouse_position, mouse_position, line_thickness, color);
                     canvas.end();
                     break :blk .idle;
                 }
                 break :blk drawing_state;
             },
             .picking_color => blk: {
-                color = color_wheel.draw(mouse_pos);
+                color = color_wheel.draw(mouse_position);
                 break :blk if (isPressed(config.key_bindings.picking_color))
                     .idle
                 else {
@@ -225,8 +274,8 @@ pub fn main() !void {
                         .height = cross_size,
                     };
 
-                    const hovering_cross = rectanglePointCollision(mouse_pos, cross_rectangle);
-                    const hovering_rectangle = rectanglePointCollision(mouse_pos, backdrop_rect);
+                    const hovering_cross = rectanglePointCollision(mouse_position, cross_rectangle);
+                    const hovering_rectangle = rectanglePointCollision(mouse_position, backdrop_rect);
 
                     if (hovering_cross and isPressed(config.key_bindings.confirm)) {
                         try texture_loader.removeTexture(index);
@@ -301,7 +350,7 @@ pub fn main() !void {
                     .height = backdrop_size.y,
                 };
 
-                const hovering_rectangle = rectanglePointCollision(mouse_pos, backdrop_rect);
+                const hovering_rectangle = rectanglePointCollision(mouse_position, backdrop_rect);
                 if (hovering_rectangle and isPressed(config.key_bindings.confirm)) {
                     try texture_loader.addTexture(canvas.texture);
                 }
@@ -345,7 +394,7 @@ pub fn main() !void {
         };
         if (drawing_state != .picking_color) {
             color_wheel.size = expDecayWithAnimationSpeed(color_wheel.size, 0, rl.getFrameTime());
-            _ = color_wheel.draw(mouse_pos);
+            _ = color_wheel.draw(mouse_position);
         }
 
         if (isDown(config.key_bindings.clear)) {
@@ -353,7 +402,7 @@ pub fn main() !void {
             rl.clearBackground(rl.Color.blank);
             canvas.end();
         }
-        rl.drawCircleV(mouse_pos, line_thickness * 2, color);
+        rl.drawCircleV(mouse_position, line_thickness * 2, color);
 
         if (@import("builtin").mode == .Debug)
             rl.drawFPS(0, 0);
