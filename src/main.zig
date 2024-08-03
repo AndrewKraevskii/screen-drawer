@@ -9,8 +9,8 @@ const config = struct {
     const key_bindings = struct {
         // zig fmt: off
         pub const draw          = .{ rl.MouseButton.mouse_button_left };
-        pub const eraser        = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };       
-        pub const draw_line     = .{ rl.MouseButton.mouse_button_right };
+        pub const draw_line     = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };       
+        pub const eraser        = .{ rl.MouseButton.mouse_button_right };
         pub const confirm       = .{ rl.MouseButton.mouse_button_left };
         pub const picking_color = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
         pub const clear         = .{ rl.KeyboardKey.key_right_bracket };
@@ -82,6 +82,7 @@ pub fn main() !void {
     defer texture_loader.deinit();
 
     const line_thickness = 4;
+    const eraser_thickness = 40;
     const wheel_target_size = 100;
 
     var color_wheel: ColorWheel = .{ .center = rl.Vector2.zero(), .size = 0 };
@@ -162,8 +163,7 @@ pub fn main() !void {
                     .idle;
             },
             .eraser => blk: {
-                const thickness = 20;
-                const radius = thickness / 2;
+                const radius = eraser_thickness / 2;
                 canvas.begin();
 
                 {
@@ -187,12 +187,12 @@ pub fn main() !void {
                     rl.endBlendMode();
                 }
                 {
-                    rl.drawLineEx(old_mouse_position, mouse_position, thickness, color);
+                    rl.drawLineEx(old_mouse_position, mouse_position, eraser_thickness, color);
 
                     rl.beginBlendMode(.blend_subtract_colors);
                     rl.gl.rlSetBlendFactors(0, 0, 0);
                     {
-                        rl.drawLineEx(old_mouse_position, mouse_position, thickness, color);
+                        rl.drawLineEx(old_mouse_position, mouse_position, eraser_thickness, color);
                     }
                     rl.endBlendMode();
                 }
@@ -402,7 +402,11 @@ pub fn main() !void {
             rl.clearBackground(rl.Color.blank);
             canvas.end();
         }
-        rl.drawCircleV(mouse_position, line_thickness * 2, color);
+        if (drawing_state == .eraser) {
+            rl.drawCircleLinesV(mouse_position, eraser_thickness / 2, color);
+        } else {
+            rl.drawCircleV(mouse_position, line_thickness * 2, color);
+        }
 
         if (@import("builtin").mode == .Debug)
             rl.drawFPS(0, 0);
