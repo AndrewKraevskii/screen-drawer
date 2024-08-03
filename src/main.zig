@@ -30,8 +30,8 @@ const config = struct {
         }
     };
 
-    /// Set to std.math.inf(f32) to disable animations.
-    const animation_speed = 10;
+    /// Set to null to disable animations.
+    const animation_speed: ?comptime_int = 10;
 
     const hide_cursor = true;
 };
@@ -92,7 +92,8 @@ pub fn main() !void {
     const canvas = rl.loadRenderTexture(width, height);
     defer canvas.unload();
 
-    var scrolling_position: usize = 0;
+    var target_scrolling_position: i64 = 0;
+    var scrolling_position: f32 = 0;
 
     while (!rl.windowShouldClose() and rl.isWindowFocused()) {
         rl.beginDrawing();
@@ -101,10 +102,12 @@ pub fn main() !void {
         const mouse_pos = rl.getMousePosition();
 
         switch (std.math.order(rl.getMouseWheelMoveV().y, 0.0)) {
-            .lt => scrolling_position += 1,
-            .gt => scrolling_position -|= 1,
+            .lt => target_scrolling_position += 1,
+            .gt => target_scrolling_position -|= 1,
             .eq => {},
         }
+
+        scrolling_position = expDecayWithAnimationSpeed(scrolling_position, @floatFromInt(target_scrolling_position), rl.getFrameTime());
 
         if (drawing_state != .view_all_images)
             rl.drawTextureRec(canvas.texture, .{
@@ -158,7 +161,7 @@ pub fn main() !void {
                 break :blk if (isPressed(config.key_bindings.picking_color))
                     .idle
                 else {
-                    color_wheel.size = expDecay(color_wheel.size, wheel_target_size, config.animation_speed, rl.getFrameTime());
+                    color_wheel.size = expDecayWithAnimationSpeed(color_wheel.size, wheel_target_size, rl.getFrameTime());
                     break :blk .picking_color;
                 };
             },
@@ -172,24 +175,28 @@ pub fn main() !void {
                 const images_on_one_row = 4;
 
                 const texture_size = screen_size.subtract(padding).scale(1.0 / @as(f32, @floatFromInt(images_on_one_row))).subtract(padding);
-                const scale = texture_size.x / @as(f32, @floatFromInt(width));
-                _ = scale; // autofix
+                const start_image: usize = @min(@abs(@max(0, target_scrolling_position)), @as(usize, @intFromFloat(@max(@floor(scrolling_position), 0))) -| 1) * images_on_one_row;
 
-                var start_image = scrolling_position * images_on_one_row;
-                const num_of_images = texture_loader.images.items.len;
-
-                if (start_image > num_of_images) {
-                    scrolling_position = @divFloor(num_of_images, images_on_one_row);
-                    start_image = scrolling_position * images_on_one_row;
+                if (target_scrolling_position < 0) {
+                    target_scrolling_position = 0;
                 }
 
+                const num_of_images = texture_loader.images.items.len;
+                const number_of_rows_including_add_button = std.math.divCeil(
+                    usize,
+                    num_of_images + 1,
+                    images_on_one_row,
+                ) catch unreachable;
+                if (target_scrolling_position >= number_of_rows_including_add_button) {
+                    target_scrolling_position = @intCast(number_of_rows_including_add_button - 1);
+                }
                 const images_to_display = images_on_one_row * images_on_one_row;
-                var index: usize = start_image;
+                var index: usize = @intCast(@max(0, start_image));
                 while (index < @min(start_image + images_to_display, texture_loader.images.items.len)) : (index += 1) {
                     const col = index % images_on_one_row;
-                    const row = (index / images_on_one_row) - scrolling_position;
+                    const row = @as(f32, @floatFromInt(index / images_on_one_row)) - scrolling_position;
                     const pos = padding.add(
-                        rl.Vector2.init(@floatFromInt(col), @floatFromInt(row))
+                        rl.Vector2.init(@floatFromInt(col), row)
                             .multiply(texture_size.add(padding)),
                     );
 
@@ -273,9 +280,9 @@ pub fn main() !void {
                     flushRaylib();
                 }
                 const col = index % images_on_one_row;
-                const row = (index / images_on_one_row) - scrolling_position;
+                const row = @as(f32, @floatFromInt(index / images_on_one_row)) - scrolling_position;
                 const pos = padding.add(
-                    rl.Vector2.init(@floatFromInt(col), @floatFromInt(row))
+                    rl.Vector2.init(@floatFromInt(col), row)
                         .multiply(texture_size.add(padding)),
                 );
 
@@ -294,7 +301,10 @@ pub fn main() !void {
                     try texture_loader.addTexture(canvas.texture);
                 }
 
-                rl.drawRectangleLinesEx(backdrop_rect, 3, rl.Color.gray);
+                rl.drawRectangleLinesEx(backdrop_rect, 3, if (hovering_rectangle)
+                    rl.Color.light_gray
+                else
+                    rl.Color.gray);
 
                 {
                     const cross_color = rl.Color.white;
@@ -329,7 +339,7 @@ pub fn main() !void {
             },
         };
         if (drawing_state != .picking_color) {
-            color_wheel.size = expDecay(color_wheel.size, 0, config.animation_speed, rl.getFrameTime());
+            color_wheel.size = expDecayWithAnimationSpeed(color_wheel.size, 0, rl.getFrameTime());
             _ = color_wheel.draw(mouse_pos);
         }
 
@@ -403,6 +413,13 @@ fn expDecay(a: anytype, b: @TypeOf(a), lambda: @TypeOf(a), dt: @TypeOf(a)) @Type
     return std.math.lerp(a, b, 1 - @exp(-lambda * dt));
 }
 
+fn expDecayWithAnimationSpeed(a: anytype, b: @TypeOf(a), dt: @TypeOf(a)) @TypeOf(a) {
+    return if (config.animation_speed) |lambda|
+        std.math.lerp(a, b, 1 - @exp(-lambda * dt))
+    else
+        b;
+}
+
 /// True if all passed keys and buttons are down
 fn isDown(keys_or_buttons: anytype) bool {
     inline for (keys_or_buttons) |key_or_button| {
@@ -419,7 +436,7 @@ fn isDown(keys_or_buttons: anytype) bool {
     return true;
 }
 
-/// True if isDown(kb) true and at least one button pressed on this frame
+/// True if isDown(keys_or_buttons) true and at least one of key_or_button pressed on this frame
 fn isPressed(keys_or_buttons: anytype) bool {
     if (!isDown(keys_or_buttons)) return false;
 
