@@ -230,7 +230,6 @@ pub fn main() !void {
 
                 const texture_size = screen_size.subtract(padding).scale(1.0 / @as(f32, @floatFromInt(images_on_one_row))).subtract(padding);
                 const start_image: usize = @min(@abs(@max(0, target_scrolling_position)), @as(usize, @intFromFloat(@max(@floor(scrolling_position), 0))) -| 1) * images_on_one_row;
-
                 if (target_scrolling_position < 0) {
                     target_scrolling_position = 0;
                 }
@@ -244,7 +243,7 @@ pub fn main() !void {
                 if (target_scrolling_position >= number_of_rows_including_add_button) {
                     target_scrolling_position = @intCast(number_of_rows_including_add_button - 1);
                 }
-                const images_to_display = images_on_one_row * images_on_one_row;
+                const images_to_display = images_on_one_row * images_on_one_row * 2;
                 var index: usize = @intCast(@max(0, start_image));
                 while (index < @min(start_image + images_to_display, texture_loader.images.items.len)) : (index += 1) {
                     const col = index % images_on_one_row;
