@@ -1,3 +1,6 @@
+//! This thing is saving/loading/creating/deliting files using multiple threads and gives
+//! loaded textures to main program.
+
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const rl = @import("raylib");
@@ -17,7 +20,7 @@ const ImageData = struct {
     file_name: []const u8,
     /// Image needs to be saved on disc
     dirty: bool = false,
-    /// image is loading or unloading
+    /// Image is loading or unloading
     processing: enum {
         loading,
         saving,
@@ -74,7 +77,7 @@ pub fn deinit(storage: *@This()) void {
         storage.mutex.lock();
         defer storage.mutex.unlock();
 
-        storage.flushFilesOnDisc();
+        storage.saveFilesOnDisc();
 
         for (storage.images.items) |*item| {
             std.debug.assert(item.dirty == false);
@@ -86,20 +89,20 @@ pub fn deinit(storage: *@This()) void {
     }
 }
 
-fn flushFilesOnDisc(storage: *@This()) void {
+fn saveFilesOnDisc(storage: *@This()) void {
     var wait_group = std.Thread.WaitGroup{};
     for (storage.images.items) |*image_data| {
         log.debug("considering saving {s}", .{image_data.file_name});
         std.debug.assert(!(image_data.dirty and image_data.image == null));
         if (!image_data.dirty) continue;
         const image = image_data.image.?;
-        storage.thread_pool.spawnWg(&wait_group, flushFileOnDisc, .{ storage, image_data.file_name, image });
+        storage.thread_pool.spawnWg(&wait_group, saveFileOnDisc, .{ storage, image_data.file_name, image });
         image_data.dirty = false;
     }
     wait_group.wait();
 }
 
-fn flushFileOnDisc(storage: *@This(), name: []const u8, image: rl.Image) void {
+fn saveFileOnDisc(storage: *@This(), name: []const u8, image: rl.Image) void {
     var buffer: [std.fs.max_path_bytes]u8 = undefined;
     const file = storage.save_directory.createFile(name, .{}) catch |e| {
         log.err("Failed to create a file {s}: {s}", .{ name, @errorName(e) });
@@ -113,25 +116,6 @@ fn flushFileOnDisc(storage: *@This(), name: []const u8, image: rl.Image) void {
     path[path.len] = 0;
     _ = image.exportToFile(path);
     log.info("saved {s}", .{path});
-}
-
-pub fn len(storage: *@This()) usize {
-    return storage.images.items.len;
-}
-
-/// Returns image if loaded. And if not starts loading in background.
-/// Asserts index is less then storage.len().
-pub fn getImage(storage: *@This(), index: usize) ?rl.Image {
-    std.debug.assert(index < storage.len());
-
-    const image_data = &storage.images.items[index];
-    if (image_data.image) |image| return image;
-
-    if (image_data.processing != .loading) {
-        image_data.processing = .loading;
-        storage.thread_pool.spawn(loaderThread, .{ storage, index }) catch @panic("can't spawn thread");
-    }
-    return null;
 }
 
 pub fn addTexture(storage: *@This(), texture: rl.Texture) !void {
@@ -155,7 +139,7 @@ pub fn addTexture(storage: *@This(), texture: rl.Texture) !void {
     }.lessThan));
 }
 
-pub fn remove(storage: *@This(), index: usize) !void {
+pub fn removeTexture(storage: *@This(), index: usize) !void {
     storage.mutex.lock();
     defer storage.mutex.unlock();
     if (storage.images.items[index].processing == .loading) {
@@ -196,7 +180,15 @@ pub fn getTexture(storage: *@This(), index: usize) ?rl.Texture {
     if (image_data.texture) |texture|
         return texture;
 
-    const image = storage.getImage(index) orelse return null;
+    const image = image: {
+        if (image_data.image) |image| break :image image;
+
+        if (image_data.processing != .loading) {
+            image_data.processing = .loading;
+            storage.thread_pool.spawn(loaderThread, .{ storage, index }) catch @panic("can't spawn thread");
+        }
+        return null;
+    };
     image_data.texture = rl.Texture.fromImage(image);
     return image_data.texture;
 }

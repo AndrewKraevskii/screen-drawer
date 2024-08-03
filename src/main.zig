@@ -1,7 +1,7 @@
 const std = @import("std");
 const rl = @import("raylib");
 const Allocator = std.mem.Allocator;
-const ImageStorage = @import("ImageStorage.zig");
+const TextureLoader = @import("TextureLoader.zig");
 
 const config = struct {
     pub const app_name = "screen-drawer";
@@ -73,8 +73,8 @@ pub fn main() !void {
     });
     defer thread_pool.deinit();
 
-    var image_loader = try ImageStorage.init(gpa, &thread_pool, save_directory);
-    defer image_loader.deinit();
+    var texture_loader = try TextureLoader.init(gpa, &thread_pool, save_directory);
+    defer texture_loader.deinit();
 
     const line_thickness = 4;
     const wheel_target_size = 100;
@@ -125,7 +125,7 @@ pub fn main() !void {
             } else if (isPressed(config.key_bindings.view_all_images)) blk: {
                 if (editing) |old_level| {
                     std.log.info("Stored texture {?d}", .{editing});
-                    try image_loader.setTexture(old_level, canvas.texture);
+                    try texture_loader.setTexture(old_level, canvas.texture);
                     canvas.begin();
                     rl.clearBackground(rl.Color.blank);
                     canvas.end();
@@ -164,7 +164,7 @@ pub fn main() !void {
             },
             .view_all_images => blk: {
                 if (isPressed(config.key_bindings.new_canvas)) {
-                    try image_loader.addTexture(canvas.texture);
+                    try texture_loader.addTexture(canvas.texture);
                 }
                 const padding = rl.Vector2.init(50, 50);
                 const screen_size = rl.Vector2.init(@floatFromInt(width), @floatFromInt(height));
@@ -173,9 +173,10 @@ pub fn main() !void {
 
                 const texture_size = screen_size.subtract(padding).scale(1.0 / @as(f32, @floatFromInt(images_on_one_row))).subtract(padding);
                 const scale = texture_size.x / @as(f32, @floatFromInt(width));
+                _ = scale; // autofix
 
                 var start_image = scrolling_position * images_on_one_row;
-                const num_of_images = image_loader.images.items.len;
+                const num_of_images = texture_loader.images.items.len;
 
                 if (start_image > num_of_images) {
                     scrolling_position = @divFloor(num_of_images, images_on_one_row);
@@ -184,8 +185,7 @@ pub fn main() !void {
 
                 const images_to_display = images_on_one_row * images_on_one_row;
                 var index: usize = start_image;
-                while (index < @min(start_image + images_to_display, image_loader.images.items.len)) : (index += 1) {
-                    const maybe_texture = image_loader.getTexture(index);
+                while (index < @min(start_image + images_to_display, texture_loader.images.items.len)) : (index += 1) {
                     const col = index % images_on_one_row;
                     const row = (index / images_on_one_row) - scrolling_position;
                     const pos = padding.add(
@@ -193,10 +193,10 @@ pub fn main() !void {
                             .multiply(texture_size.add(padding)),
                     );
 
-                    const actual_texture_size = if (maybe_texture) |texture| rl.Vector2.init(@floatFromInt(texture.width), @floatFromInt(texture.height)) else texture_size;
+                    const maybe_texture = texture_loader.getTexture(index);
 
                     const border_size = rl.Vector2{ .x = 10, .y = 10 };
-                    const backdrop_size = actual_texture_size.scale(scale).add(border_size.scale(2));
+                    const backdrop_size = texture_size.add(border_size.scale(2));
                     const backdrop_pos = pos.subtract(border_size);
                     const backdrop_rect = rl.Rectangle{
                         .x = backdrop_pos.x,
@@ -205,7 +205,7 @@ pub fn main() !void {
                         .height = backdrop_size.y,
                     };
 
-                    const cross_size = 20;
+                    const cross_size = 40;
                     const cross_rectangle = rl.Rectangle{
                         .x = backdrop_pos.x + backdrop_size.x - cross_size,
                         .y = backdrop_pos.y,
@@ -213,19 +213,15 @@ pub fn main() !void {
                         .height = cross_size,
                     };
 
-                    if (rectanglePointCollision(mouse_pos, cross_rectangle) and isPressed(config.key_bindings.confirm)) {
-                        try image_loader.remove(index);
+                    const hovering_cross = rectanglePointCollision(mouse_pos, cross_rectangle);
+                    const hovering_rectangle = rectanglePointCollision(mouse_pos, backdrop_rect);
+
+                    if (hovering_cross and isPressed(config.key_bindings.confirm)) {
+                        try texture_loader.removeTexture(index);
                         continue;
                     }
 
-                    const border_color = if (rectanglePointCollision(mouse_pos, backdrop_rect))
-                        rl.Color.light_gray
-                    else
-                        rl.Color.gray;
-
-                    // backdrop_pos.add(backdrop_size);
-
-                    if (rectanglePointCollision(mouse_pos, backdrop_rect) and isPressed(config.key_bindings.confirm)) {
+                    if (hovering_rectangle and isPressed(config.key_bindings.confirm)) {
                         editing = index;
                         std.log.info("Now editing {d} level", .{index});
                         canvas.begin();
@@ -235,30 +231,99 @@ pub fn main() !void {
                         break :blk .idle;
                     }
 
+                    const border_color = if (hovering_rectangle and !hovering_cross)
+                        rl.Color.light_gray
+                    else
+                        rl.Color.gray;
+
                     rl.drawRectangleRec(backdrop_rect, rl.Color.black.alpha(0.6));
                     rl.drawRectangleLinesEx(backdrop_rect, 3, border_color);
 
-                    if (maybe_texture) |t| t.drawEx(pos, 0, scale, rl.Color.white);
-                    {
+                    if (maybe_texture) |t| t.drawPro(.{
+                        .x = 0,
+                        .y = 0,
+                        .width = @floatFromInt(t.width),
+                        .height = @floatFromInt(t.height),
+                    }, .{
+                        .x = pos.x,
+                        .y = pos.y,
+                        .width = texture_size.x,
+                        .height = texture_size.y,
+                    }, rl.Vector2.zero(), 0, rl.Color.white);
+
+                    { // Draw cross
                         rl.drawRectangleRec(cross_rectangle, rl.Color.red);
                         const thickness = 3;
+                        const cross_color = if (hovering_cross) rl.Color.white else rl.Color.black;
                         rl.drawLineEx(.{
                             .x = cross_rectangle.x,
                             .y = cross_rectangle.y,
                         }, .{
                             .x = cross_rectangle.x + cross_size,
                             .y = cross_rectangle.y + cross_size,
-                        }, thickness, rl.Color.black);
+                        }, thickness, cross_color);
                         rl.drawLineEx(.{
                             .x = cross_rectangle.x + cross_size,
                             .y = cross_rectangle.y,
                         }, .{
                             .x = cross_rectangle.x,
                             .y = cross_rectangle.y + cross_size,
-                        }, thickness, rl.Color.black);
+                        }, thickness, cross_color);
                     }
                     flushRaylib();
                 }
+                const col = index % images_on_one_row;
+                const row = (index / images_on_one_row) - scrolling_position;
+                const pos = padding.add(
+                    rl.Vector2.init(@floatFromInt(col), @floatFromInt(row))
+                        .multiply(texture_size.add(padding)),
+                );
+
+                const border_size = rl.Vector2{ .x = 10, .y = 10 };
+                const backdrop_size = texture_size.add(border_size.scale(2));
+                const backdrop_pos = pos.subtract(border_size);
+                const backdrop_rect = rl.Rectangle{
+                    .x = backdrop_pos.x,
+                    .y = backdrop_pos.y,
+                    .width = backdrop_size.x,
+                    .height = backdrop_size.y,
+                };
+
+                const hovering_rectangle = rectanglePointCollision(mouse_pos, backdrop_rect);
+                if (hovering_rectangle and isPressed(config.key_bindings.confirm)) {
+                    try texture_loader.addTexture(canvas.texture);
+                }
+
+                rl.drawRectangleLinesEx(backdrop_rect, 3, rl.Color.gray);
+
+                {
+                    const cross_color = rl.Color.white;
+                    const middle_pos = rl.Vector2.init(backdrop_rect.x + backdrop_rect.width / 2, backdrop_rect.y + backdrop_rect.height / 2);
+                    const thickness = 3;
+                    const half_plus_size = 10;
+                    const half_backdrop_size = 30;
+                    rl.drawRectangleRec(.{
+                        .x = middle_pos.x - half_backdrop_size,
+                        .y = middle_pos.y - half_backdrop_size,
+                        .width = half_backdrop_size * 2,
+                        .height = half_backdrop_size * 2,
+                    }, rl.Color.dark_gray);
+                    rl.drawLineEx(.{
+                        .x = middle_pos.x - half_plus_size,
+                        .y = middle_pos.y,
+                    }, .{
+                        .x = middle_pos.x + half_plus_size,
+                        .y = middle_pos.y,
+                    }, thickness, cross_color);
+                    rl.drawLineEx(.{
+                        .x = middle_pos.x,
+                        .y = middle_pos.y - half_plus_size,
+                    }, .{
+                        .x = middle_pos.x,
+                        .y = middle_pos.y + half_plus_size,
+                    }, thickness, cross_color);
+                }
+                flushRaylib();
 
                 break :blk .view_all_images;
             },
@@ -282,7 +347,7 @@ pub fn main() !void {
 
     if (editing) |level| {
         std.log.info("Stored texture {d}", .{level});
-        try image_loader.setTexture(level, canvas.texture);
+        try texture_loader.setTexture(level, canvas.texture);
     }
 }
 
