@@ -88,7 +88,7 @@ pub fn main() !void {
     var drawing_state: union(enum) {
         idle,
         drawing,
-        drawing_line,
+        drawing_line: rl.Vector2,
         eraser,
         picking_color,
         view_all_images,
@@ -135,7 +135,7 @@ pub fn main() !void {
             .idle => if (isDown(config.key_bindings.draw))
                 .drawing
             else if (isDown(config.key_bindings.draw_line))
-                .drawing_line
+                .{ .drawing_line = mouse_position }
             else if (isDown(config.key_bindings.eraser))
                 .eraser
             else if (isPressed(config.key_bindings.picking_color)) blk: {
@@ -200,11 +200,11 @@ pub fn main() !void {
 
                 break :blk if (isDown(config.key_bindings.eraser)) .eraser else .idle;
             },
-            .drawing_line => blk: {
-                drawNiceLine(old_mouse_position, mouse_position, line_thickness, color);
+            .drawing_line => |old_position| blk: {
+                drawNiceLine(old_position, mouse_position, line_thickness, color);
                 if (!isDown(config.key_bindings.draw_line)) {
                     canvas.begin();
-                    drawNiceLine(old_mouse_position, mouse_position, line_thickness, color);
+                    drawNiceLine(old_position, mouse_position, line_thickness, color);
                     canvas.end();
                     break :blk .idle;
                 }
