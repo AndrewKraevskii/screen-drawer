@@ -9,11 +9,10 @@ const config = struct {
     const key_bindings = struct {
         // zig fmt: off
         pub const draw          = .{ rl.MouseButton.mouse_button_left };
-        pub const draw_line     = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };       
+        pub const draw_line     = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };
         pub const eraser        = .{ rl.MouseButton.mouse_button_right };
         pub const confirm       = .{ rl.MouseButton.mouse_button_left };
-        pub const picking_color = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
-        pub const clear         = .{ rl.KeyboardKey.key_right_bracket };
+        pub const picking_color = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };        pub const clear         = .{ rl.KeyboardKey.key_right_bracket };
         pub const scroll_up     = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
         pub const scroll_down   = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };
         
@@ -212,7 +211,7 @@ pub fn main() !void {
             },
             .picking_color => blk: {
                 color = color_wheel.draw(mouse_position);
-                break :blk if (isPressed(config.key_bindings.picking_color))
+                break :blk if (!isDown(config.key_bindings.picking_color))
                     .idle
                 else {
                     color_wheel.size = expDecayWithAnimationSpeed(color_wheel.size, wheel_target_size, rl.getFrameTime());
