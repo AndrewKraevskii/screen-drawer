@@ -14,7 +14,7 @@ Works on linux x11. Probably will work on Wayland (since uses raylib) but I have
 ## Keybindings
 You can look at keybindings at start of src/main.zig and change them however you like. Default once are just for my setup with stylus. Also mouse wheel works in sketches preview.
 
-## Where is stores images
+## Where it stores images
 It stores images in default location for apps to store data on your OS.
 - linux => ~/.local/share/screen-drawer/
 - windows => %LOCALAPPDATA%\\screen-drawer\\
