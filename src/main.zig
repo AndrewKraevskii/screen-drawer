@@ -346,9 +346,7 @@ pub fn main() !void {
                     rl.Color.gray);
 
                 {
-                    const cross_color = rl.Color.white;
                     const middle_pos = rl.Vector2.init(backdrop_rect.x + backdrop_rect.width / 2, backdrop_rect.y + backdrop_rect.height / 2);
-                    const thickness = 3;
                     const half_plus_size = 10;
                     const half_backdrop_size = 30;
                     rl.drawRectangleRec(.{
@@ -357,20 +355,12 @@ pub fn main() !void {
                         .width = half_backdrop_size * 2,
                         .height = half_backdrop_size * 2,
                     }, rl.Color.dark_gray);
-                    rl.drawLineEx(.{
+                    drawPlus(.{
                         .x = middle_pos.x - half_plus_size,
-                        .y = middle_pos.y,
-                    }, .{
-                        .x = middle_pos.x + half_plus_size,
-                        .y = middle_pos.y,
-                    }, thickness, cross_color);
-                    rl.drawLineEx(.{
-                        .x = middle_pos.x,
                         .y = middle_pos.y - half_plus_size,
-                    }, .{
-                        .x = middle_pos.x,
-                        .y = middle_pos.y + half_plus_size,
-                    }, thickness, cross_color);
+                        .width = half_plus_size * 2,
+                        .height = half_plus_size * 2,
+                    }, 3, rl.Color.white);
                 }
                 flushRaylib();
 
@@ -529,7 +519,7 @@ fn getAppDataDirEnsurePathExist(alloc: Allocator, appname: []const u8) ![]u8 {
     return data_dir_path;
 }
 
-fn drawCross(rect: rl.Rectangle, thickness: f32, color: rl.Color) void { // Draw cross
+fn drawCross(rect: rl.Rectangle, thickness: f32, color: rl.Color) void {
     rl.drawRectangleRec(rect, rl.Color.red);
     rl.drawLineEx(.{
         .x = rect.x,
@@ -543,6 +533,23 @@ fn drawCross(rect: rl.Rectangle, thickness: f32, color: rl.Color) void { // Draw
         .y = rect.y,
     }, .{
         .x = rect.x,
+        .y = rect.y + rect.height,
+    }, thickness, color);
+}
+
+fn drawPlus(rect: rl.Rectangle, thickness: f32, color: rl.Color) void {
+    rl.drawLineEx(.{
+        .x = rect.x,
+        .y = rect.y + rect.height / 2,
+    }, .{
+        .x = rect.x + rect.width,
+        .y = rect.y + rect.height / 2,
+    }, thickness, color);
+    rl.drawLineEx(.{
+        .x = rect.x + rect.width / 2,
+        .y = rect.y,
+    }, .{
+        .x = rect.x + rect.width / 2,
         .y = rect.y + rect.height,
     }, thickness, color);
 }
