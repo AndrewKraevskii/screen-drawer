@@ -12,7 +12,8 @@ const config = struct {
         pub const draw_line     = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };
         pub const eraser        = .{ rl.MouseButton.mouse_button_right };
         pub const confirm       = .{ rl.MouseButton.mouse_button_left };
-        pub const picking_color = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };        pub const clear         = .{ rl.KeyboardKey.key_right_bracket };
+        pub const picking_color = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
+        pub const clear         = .{ rl.KeyboardKey.key_right_bracket };
         pub const scroll_up     = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
         pub const scroll_down   = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };
         
