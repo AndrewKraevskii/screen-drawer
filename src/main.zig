@@ -223,7 +223,7 @@ pub fn main() !void {
                 if (isPressed(config.key_bindings.new_canvas)) {
                     try texture_loader.addTexture(canvas.texture);
                 }
-                const padding = rl.Vector2.init(50, 50);
+                const padding = rl.Vector2.one().scale(50);
                 const screen_size = rl.Vector2.init(@floatFromInt(width), @floatFromInt(height));
 
                 const images_on_one_row = 4;
@@ -246,49 +246,45 @@ pub fn main() !void {
                 const images_to_display = images_on_one_row * images_on_one_row * 2;
                 var index: usize = @intCast(@max(0, start_image));
                 while (index < @min(start_image + images_to_display, texture_loader.images.items.len)) : (index += 1) {
-                    const col = index % images_on_one_row;
-                    const row = @as(f32, @floatFromInt(index / images_on_one_row)) - scrolling_position;
-                    const pos = padding.add(
-                        rl.Vector2.init(@floatFromInt(col), row)
-                            .multiply(texture_size.add(padding)),
-                    );
-
+                    const backdrop_rect: rl.Rectangle = backdrop_rect: {
+                        const col = index % images_on_one_row;
+                        const row = @as(f32, @floatFromInt(index / images_on_one_row)) - scrolling_position;
+                        const pos = padding.add(
+                            rl.Vector2.init(@floatFromInt(col), row)
+                                .multiply(texture_size.add(padding)),
+                        );
+                        const border_size = rl.Vector2{ .x = 10, .y = 10 };
+                        const backdrop_size = texture_size.add(border_size.scale(2));
+                        const backdrop_pos = pos.subtract(border_size);
+                        break :backdrop_rect .{
+                            .x = backdrop_pos.x,
+                            .y = backdrop_pos.y,
+                            .width = backdrop_size.x,
+                            .height = backdrop_size.y,
+                        };
+                    };
                     const maybe_texture = texture_loader.getTexture(index);
 
-                    const border_size = rl.Vector2{ .x = 10, .y = 10 };
-                    const backdrop_size = texture_size.add(border_size.scale(2));
-                    const backdrop_pos = pos.subtract(border_size);
-                    const backdrop_rect = rl.Rectangle{
-                        .x = backdrop_pos.x,
-                        .y = backdrop_pos.y,
-                        .width = backdrop_size.x,
-                        .height = backdrop_size.y,
-                    };
-
-                    const cross_size = 40;
-                    const cross_rectangle = rl.Rectangle{
-                        .x = backdrop_pos.x + backdrop_size.x - cross_size,
-                        .y = backdrop_pos.y,
-                        .width = cross_size,
-                        .height = cross_size,
-                    };
+                    const cross_rectangle = resizeRectangle(backdrop_rect, rl.Vector2.one().scale(40));
 
                     const hovering_cross = rectanglePointCollision(mouse_position, cross_rectangle);
                     const hovering_rectangle = rectanglePointCollision(mouse_position, backdrop_rect);
 
-                    if (hovering_cross and isPressed(config.key_bindings.confirm)) {
-                        try texture_loader.removeTexture(index);
-                        continue;
-                    }
+                    if (isPressed(config.key_bindings.confirm)) {
+                        if (hovering_cross) {
+                            try texture_loader.removeTexture(index);
+                            continue;
+                        }
 
-                    if (hovering_rectangle and isPressed(config.key_bindings.confirm)) {
-                        editing = index;
-                        std.log.info("Now editing {d} level", .{index});
-                        canvas.begin();
-                        rl.clearBackground(rl.Color.blank);
-                        if (maybe_texture) |texture| texture.draw(0, 0, rl.Color.white);
-                        canvas.end();
-                        break :blk .idle;
+                        if (hovering_rectangle) {
+                            editing = index;
+                            std.log.info("Now editing {d} level", .{index});
+                            canvas.begin();
+                            rl.clearBackground(rl.Color.blank);
+                            if (maybe_texture) |texture| texture.draw(0, 0, rl.Color.white);
+                            canvas.end();
+                            break :blk .idle;
+                        }
                     }
 
                     const border_color = if (hovering_rectangle and !hovering_cross)
@@ -299,40 +295,43 @@ pub fn main() !void {
                     rl.drawRectangleRec(backdrop_rect, rl.Color.black.alpha(0.6));
                     rl.drawRectangleLinesEx(backdrop_rect, 3, border_color);
 
-                    if (maybe_texture) |t| t.drawPro(.{
-                        .x = 0,
-                        .y = 0,
-                        .width = @floatFromInt(t.width),
-                        .height = @floatFromInt(t.height),
-                    }, .{
-                        .x = pos.x,
-                        .y = pos.y,
-                        .width = texture_size.x,
-                        .height = texture_size.y,
-                    }, rl.Vector2.zero(), 0, rl.Color.white);
+                    if (maybe_texture) |t| t.drawPro(
+                        .{
+                            .x = 0,
+                            .y = 0,
+                            .width = @floatFromInt(t.width),
+                            .height = @floatFromInt(t.height),
+                        },
+                        resizeRectangle(backdrop_rect, texture_size),
+                        rl.Vector2.zero(),
+                        0,
+                        rl.Color.white,
+                    );
 
                     { // Draw cross
                         rl.drawRectangleRec(cross_rectangle, rl.Color.red);
                         const cross_color = if (hovering_cross) rl.Color.white else rl.Color.black;
-                        drawCross(cross_rectangle, 3, cross_color);
+                        drawCross(scaleRectangle(cross_rectangle, rl.Vector2.one().scale(0.7)), 3, cross_color);
                     }
                     flushRaylib();
                 }
-                const col = index % images_on_one_row;
-                const row = @as(f32, @floatFromInt(index / images_on_one_row)) - scrolling_position;
-                const pos = padding.add(
-                    rl.Vector2.init(@floatFromInt(col), row)
-                        .multiply(texture_size.add(padding)),
-                );
 
-                const border_size = rl.Vector2{ .x = 10, .y = 10 };
-                const backdrop_size = texture_size.add(border_size.scale(2));
-                const backdrop_pos = pos.subtract(border_size);
-                const backdrop_rect = rl.Rectangle{
-                    .x = backdrop_pos.x,
-                    .y = backdrop_pos.y,
-                    .width = backdrop_size.x,
-                    .height = backdrop_size.y,
+                const backdrop_rect: rl.Rectangle = backdrop_rect: {
+                    const col = index % images_on_one_row;
+                    const row = @as(f32, @floatFromInt(index / images_on_one_row)) - scrolling_position;
+                    const pos = padding.add(
+                        rl.Vector2.init(@floatFromInt(col), row)
+                            .multiply(texture_size.add(padding)),
+                    );
+                    const border_size = rl.Vector2{ .x = 10, .y = 10 };
+                    const backdrop_size = texture_size.add(border_size.scale(2));
+                    const backdrop_pos = pos.subtract(border_size);
+                    break :backdrop_rect .{
+                        .x = backdrop_pos.x,
+                        .y = backdrop_pos.y,
+                        .width = backdrop_size.x,
+                        .height = backdrop_size.y,
+                    };
                 };
 
                 const hovering_rectangle = rectanglePointCollision(mouse_position, backdrop_rect);
@@ -346,21 +345,15 @@ pub fn main() !void {
                     rl.Color.gray);
 
                 {
-                    const middle_pos = rl.Vector2.init(backdrop_rect.x + backdrop_rect.width / 2, backdrop_rect.y + backdrop_rect.height / 2);
-                    const half_plus_size = 10;
-                    const half_backdrop_size = 30;
-                    rl.drawRectangleRec(.{
-                        .x = middle_pos.x - half_backdrop_size,
-                        .y = middle_pos.y - half_backdrop_size,
-                        .width = half_backdrop_size * 2,
-                        .height = half_backdrop_size * 2,
-                    }, rl.Color.dark_gray);
-                    drawPlus(.{
-                        .x = middle_pos.x - half_plus_size,
-                        .y = middle_pos.y - half_plus_size,
-                        .width = half_plus_size * 2,
-                        .height = half_plus_size * 2,
-                    }, 3, rl.Color.white);
+                    rl.drawRectangleRec(
+                        resizeRectangle(backdrop_rect, rl.Vector2.one().scale(60)),
+                        rl.Color.dark_gray,
+                    );
+                    drawPlus(
+                        resizeRectangle(backdrop_rect, rl.Vector2.one().scale(20)),
+                        3,
+                        rl.Color.white,
+                    );
                 }
                 flushRaylib();
 
@@ -552,6 +545,26 @@ fn drawPlus(rect: rl.Rectangle, thickness: f32, color: rl.Color) void {
         .x = rect.x + rect.width / 2,
         .y = rect.y + rect.height,
     }, thickness, color);
+}
+
+fn scaleRectangle(rect: rl.Rectangle, scale: rl.Vector2) rl.Rectangle {
+    return resizeRectangle(rect, scale.multiply(rectangleSize(rect)));
+}
+
+fn resizeRectangle(rect: rl.Rectangle, size: rl.Vector2) rl.Rectangle {
+    return .{
+        .x = rect.x + (rect.width - size.x) / 2,
+        .y = rect.y + (rect.height - size.y) / 2,
+        .width = size.x,
+        .height = size.y,
+    };
+}
+
+fn rectangleSize(rect: rl.Rectangle) rl.Vector2 {
+    return .{
+        .x = rect.width,
+        .y = rect.height,
+    };
 }
 
 test {
