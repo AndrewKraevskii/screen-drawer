@@ -313,22 +313,8 @@ pub fn main() !void {
 
                     { // Draw cross
                         rl.drawRectangleRec(cross_rectangle, rl.Color.red);
-                        const thickness = 3;
                         const cross_color = if (hovering_cross) rl.Color.white else rl.Color.black;
-                        rl.drawLineEx(.{
-                            .x = cross_rectangle.x,
-                            .y = cross_rectangle.y,
-                        }, .{
-                            .x = cross_rectangle.x + cross_size,
-                            .y = cross_rectangle.y + cross_size,
-                        }, thickness, cross_color);
-                        rl.drawLineEx(.{
-                            .x = cross_rectangle.x + cross_size,
-                            .y = cross_rectangle.y,
-                        }, .{
-                            .x = cross_rectangle.x,
-                            .y = cross_rectangle.y + cross_size,
-                        }, thickness, cross_color);
+                        drawCross(cross_rectangle, 3, cross_color);
                     }
                     flushRaylib();
                 }
@@ -541,6 +527,24 @@ fn getAppDataDirEnsurePathExist(alloc: Allocator, appname: []const u8) ![]u8 {
         else => |err| return err,
     };
     return data_dir_path;
+}
+
+fn drawCross(rect: rl.Rectangle, thickness: f32, color: rl.Color) void { // Draw cross
+    rl.drawRectangleRec(rect, rl.Color.red);
+    rl.drawLineEx(.{
+        .x = rect.x,
+        .y = rect.y,
+    }, .{
+        .x = rect.x + rect.width,
+        .y = rect.y + rect.height,
+    }, thickness, color);
+    rl.drawLineEx(.{
+        .x = rect.x + rect.width,
+        .y = rect.y,
+    }, .{
+        .x = rect.x,
+        .y = rect.y + rect.height,
+    }, thickness, color);
 }
 
 test {
