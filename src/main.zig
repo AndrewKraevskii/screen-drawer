@@ -1,7 +1,7 @@
 const std = @import("std");
 const rl = @import("raylib");
 const Allocator = std.mem.Allocator;
-const TextureLoader = @import("TextureLoader.zig");
+const AssetLoader = @import("AssetLoader.zig");
 
 const config = struct {
     pub const app_name = "screen-drawer";
@@ -78,7 +78,7 @@ pub fn main() !void {
     });
     defer thread_pool.deinit();
 
-    var texture_loader = try TextureLoader.init(gpa, &thread_pool, save_directory);
+    var texture_loader = try AssetLoader.init(gpa, &thread_pool, save_directory);
     defer texture_loader.deinit();
 
     const line_thickness = 4;

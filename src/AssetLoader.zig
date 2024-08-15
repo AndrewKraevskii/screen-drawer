@@ -14,9 +14,9 @@ images: Storage,
 thread_pool: *std.Thread.Pool,
 mutex: std.Thread.Mutex,
 
-const Storage = std.ArrayListUnmanaged(ImageData);
+const Storage = std.ArrayListUnmanaged(Asset);
 
-const ImageData = struct {
+const Asset = struct {
     file_name: []const u8,
     /// Image needs to be saved on disc
     dirty: bool = false,
@@ -57,8 +57,8 @@ pub fn init(
         });
     }
 
-    std.mem.sort(ImageData, images.items, {}, struct {
-        pub fn lessThan(_: void, l: ImageData, r: ImageData) bool {
+    std.mem.sort(Asset, images.items, {}, struct {
+        pub fn lessThan(_: void, l: Asset, r: Asset) bool {
             return std.mem.lessThan(u8, l.file_name, r.file_name);
         }
     }.lessThan);
@@ -132,8 +132,8 @@ pub fn addTexture(storage: *@This(), texture: rl.Texture) !void {
     });
     storage.mutex.unlock();
     try storage.setTexture(storage.images.items.len - 1, texture);
-    std.debug.assert(std.sort.isSorted(ImageData, storage.images.items, {}, struct {
-        pub fn lessThan(_: void, l: ImageData, r: ImageData) bool {
+    std.debug.assert(std.sort.isSorted(Asset, storage.images.items, {}, struct {
+        pub fn lessThan(_: void, l: Asset, r: Asset) bool {
             return std.mem.lessThan(u8, l.file_name, r.file_name);
         }
     }.lessThan));
