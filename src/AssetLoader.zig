@@ -210,5 +210,5 @@ fn loaderThread(storage: *@This(), index: usize) void {
     storage.mutex.lock();
     image_data.image = image;
     image_data.processing = .none;
-    defer storage.mutex.unlock();
+    storage.mutex.unlock();
 }

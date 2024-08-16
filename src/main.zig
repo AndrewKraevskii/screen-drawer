@@ -265,7 +265,10 @@ pub fn main() !void {
                     };
                     const maybe_texture = texture_loader.getTexture(index);
 
-                    const cross_rectangle = resizeRectangle(backdrop_rect, rl.Vector2.one().scale(40));
+                    const cross_rectangle = resizeRectangle(backdrop_rect, rl.Vector2.one().scale(40), .{
+                        .x = 1,
+                        .y = 0,
+                    });
 
                     const hovering_cross = rectanglePointCollision(mouse_position, cross_rectangle);
                     const hovering_rectangle = rectanglePointCollision(mouse_position, backdrop_rect);
@@ -302,7 +305,7 @@ pub fn main() !void {
                             .width = @floatFromInt(t.width),
                             .height = @floatFromInt(t.height),
                         },
-                        resizeRectangle(backdrop_rect, texture_size),
+                        resizeRectangleCenter(backdrop_rect, texture_size),
                         rl.Vector2.zero(),
                         0,
                         rl.Color.white,
@@ -311,7 +314,7 @@ pub fn main() !void {
                     { // Draw cross
                         rl.drawRectangleRec(cross_rectangle, rl.Color.red);
                         const cross_color = if (hovering_cross) rl.Color.white else rl.Color.black;
-                        drawCross(scaleRectangle(cross_rectangle, rl.Vector2.one().scale(0.7)), 3, cross_color);
+                        drawCross(scaleRectangleCenter(cross_rectangle, rl.Vector2.one().scale(0.7)), 3, cross_color);
                     }
                     flushRaylib();
                 }
@@ -346,11 +349,11 @@ pub fn main() !void {
 
                 {
                     rl.drawRectangleRec(
-                        resizeRectangle(backdrop_rect, rl.Vector2.one().scale(60)),
+                        resizeRectangleCenter(backdrop_rect, rl.Vector2.one().scale(60)),
                         rl.Color.dark_gray,
                     );
                     drawPlus(
-                        resizeRectangle(backdrop_rect, rl.Vector2.one().scale(20)),
+                        resizeRectangleCenter(backdrop_rect, rl.Vector2.one().scale(20)),
                         3,
                         rl.Color.white,
                     );
@@ -547,14 +550,25 @@ fn drawPlus(rect: rl.Rectangle, thickness: f32, color: rl.Color) void {
     }, thickness, color);
 }
 
-fn scaleRectangle(rect: rl.Rectangle, scale: rl.Vector2) rl.Rectangle {
-    return resizeRectangle(rect, scale.multiply(rectangleSize(rect)));
+fn scaleRectangleCenter(rect: rl.Rectangle, scale: rl.Vector2) rl.Rectangle {
+    return resizeRectangleCenter(rect, scale.multiply(rectangleSize(rect)));
 }
 
-fn resizeRectangle(rect: rl.Rectangle, size: rl.Vector2) rl.Rectangle {
+fn scaleRectangle(rect: rl.Rectangle, scale: rl.Vector2, origin: rl.Vector2) rl.Rectangle {
+    return resizeRectangle(rect, scale.multiply(rectangleSize(rect)), origin);
+}
+
+fn resizeRectangleCenter(rect: rl.Rectangle, size: rl.Vector2) rl.Rectangle {
+    return resizeRectangle(rect, size, .{
+        .x = 0.5,
+        .y = 0.5,
+    });
+}
+
+fn resizeRectangle(rect: rl.Rectangle, size: rl.Vector2, origin: rl.Vector2) rl.Rectangle {
     return .{
-        .x = rect.x + (rect.width - size.x) / 2,
-        .y = rect.y + (rect.height - size.y) / 2,
+        .x = rect.x + (rect.width - size.x) * origin.x,
+        .y = rect.y + (rect.height - size.y) * origin.y,
         .width = size.x,
         .height = size.y,
     };
