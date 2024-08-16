@@ -245,7 +245,7 @@ pub fn main() !void {
                 }
                 const images_to_display = images_on_one_row * images_on_one_row * 2;
                 var index: usize = @intCast(@max(0, start_image));
-                while (index < @min(start_image + images_to_display, texture_loader.images.items.len)) : (index += 1) {
+                while (index <= @min(start_image + images_to_display, texture_loader.images.items.len)) : (index += 1) {
                     const backdrop_rect: rl.Rectangle = backdrop_rect: {
                         const col = index % images_on_one_row;
                         const row = @as(f32, @floatFromInt(index / images_on_one_row)) - scrolling_position;
@@ -263,102 +263,49 @@ pub fn main() !void {
                             .height = backdrop_size.y,
                         };
                     };
-                    const maybe_texture = texture_loader.getTexture(index);
-
-                    const cross_rectangle = resizeRectangle(backdrop_rect, rl.Vector2.one().scale(40), .{
-                        .x = 1,
-                        .y = 0,
-                    });
-
-                    const hovering_cross = rectanglePointCollision(mouse_position, cross_rectangle);
-                    const hovering_rectangle = rectanglePointCollision(mouse_position, backdrop_rect);
-
-                    if (isPressed(config.key_bindings.confirm)) {
-                        if (hovering_cross) {
-                            try texture_loader.removeTexture(index);
-                            continue;
+                    if (index != texture_loader.images.items.len) {
+                        const maybe_texture = texture_loader.getTexture(index);
+                        switch (item(backdrop_rect, maybe_texture)) {
+                            .idle => {},
+                            .delete => {
+                                // flush or else texture removing would case raylib to draw wrong texture.
+                                flushRaylib();
+                                try texture_loader.removeTexture(index);
+                            },
+                            .select => {
+                                editing = index;
+                                std.log.info("Now editing {d} level", .{index});
+                                canvas.begin();
+                                rl.clearBackground(rl.Color.blank);
+                                if (maybe_texture) |texture| texture.draw(0, 0, rl.Color.white);
+                                canvas.end();
+                                break :blk .idle;
+                            },
+                        }
+                    } else { // Draw add new textures
+                        const hovering_rectangle = rectanglePointCollision(mouse_position, backdrop_rect);
+                        if (hovering_rectangle and isPressed(config.key_bindings.confirm)) {
+                            try texture_loader.addTexture(canvas.texture);
                         }
 
-                        if (hovering_rectangle) {
-                            editing = index;
-                            std.log.info("Now editing {d} level", .{index});
-                            canvas.begin();
-                            rl.clearBackground(rl.Color.blank);
-                            if (maybe_texture) |texture| texture.draw(0, 0, rl.Color.white);
-                            canvas.end();
-                            break :blk .idle;
+                        rl.drawRectangleLinesEx(backdrop_rect, 3, if (hovering_rectangle)
+                            rl.Color.light_gray
+                        else
+                            rl.Color.gray);
+
+                        {
+                            rl.drawRectangleRec(
+                                resizeRectangleCenter(backdrop_rect, rl.Vector2.one().scale(60)),
+                                rl.Color.dark_gray,
+                            );
+                            drawPlus(
+                                resizeRectangleCenter(backdrop_rect, rl.Vector2.one().scale(20)),
+                                3,
+                                rl.Color.white,
+                            );
                         }
                     }
-
-                    const border_color = if (hovering_rectangle and !hovering_cross)
-                        rl.Color.light_gray
-                    else
-                        rl.Color.gray;
-
-                    rl.drawRectangleRec(backdrop_rect, rl.Color.black.alpha(0.6));
-                    rl.drawRectangleLinesEx(backdrop_rect, 3, border_color);
-
-                    if (maybe_texture) |t| t.drawPro(
-                        .{
-                            .x = 0,
-                            .y = 0,
-                            .width = @floatFromInt(t.width),
-                            .height = @floatFromInt(t.height),
-                        },
-                        resizeRectangleCenter(backdrop_rect, texture_size),
-                        rl.Vector2.zero(),
-                        0,
-                        rl.Color.white,
-                    );
-
-                    { // Draw cross
-                        rl.drawRectangleRec(cross_rectangle, rl.Color.red);
-                        const cross_color = if (hovering_cross) rl.Color.white else rl.Color.black;
-                        drawCross(scaleRectangleCenter(cross_rectangle, rl.Vector2.one().scale(0.7)), 3, cross_color);
-                    }
-                    flushRaylib();
                 }
-
-                const backdrop_rect: rl.Rectangle = backdrop_rect: {
-                    const col = index % images_on_one_row;
-                    const row = @as(f32, @floatFromInt(index / images_on_one_row)) - scrolling_position;
-                    const pos = padding.add(
-                        rl.Vector2.init(@floatFromInt(col), row)
-                            .multiply(texture_size.add(padding)),
-                    );
-                    const border_size = rl.Vector2{ .x = 10, .y = 10 };
-                    const backdrop_size = texture_size.add(border_size.scale(2));
-                    const backdrop_pos = pos.subtract(border_size);
-                    break :backdrop_rect .{
-                        .x = backdrop_pos.x,
-                        .y = backdrop_pos.y,
-                        .width = backdrop_size.x,
-                        .height = backdrop_size.y,
-                    };
-                };
-
-                const hovering_rectangle = rectanglePointCollision(mouse_position, backdrop_rect);
-                if (hovering_rectangle and isPressed(config.key_bindings.confirm)) {
-                    try texture_loader.addTexture(canvas.texture);
-                }
-
-                rl.drawRectangleLinesEx(backdrop_rect, 3, if (hovering_rectangle)
-                    rl.Color.light_gray
-                else
-                    rl.Color.gray);
-
-                {
-                    rl.drawRectangleRec(
-                        resizeRectangleCenter(backdrop_rect, rl.Vector2.one().scale(60)),
-                        rl.Color.dark_gray,
-                    );
-                    drawPlus(
-                        resizeRectangleCenter(backdrop_rect, rl.Vector2.one().scale(20)),
-                        3,
-                        rl.Color.white,
-                    );
-                }
-                flushRaylib();
 
                 break :blk .view_all_images;
             },
@@ -515,7 +462,13 @@ fn getAppDataDirEnsurePathExist(alloc: Allocator, appname: []const u8) ![]u8 {
     return data_dir_path;
 }
 
-fn drawCross(rect: rl.Rectangle, thickness: f32, color: rl.Color) void {
+fn cross(
+    rect: rl.Rectangle,
+    thickness: f32,
+) bool {
+    const mouse_position = rl.getMousePosition();
+    const hovering_cross = rectanglePointCollision(mouse_position, rect);
+    const color = if (hovering_cross) rl.Color.white else rl.Color.black;
     rl.drawRectangleRec(rect, rl.Color.red);
     rl.drawLineEx(.{
         .x = rect.x,
@@ -531,6 +484,7 @@ fn drawCross(rect: rl.Rectangle, thickness: f32, color: rl.Color) void {
         .x = rect.x,
         .y = rect.y + rect.height,
     }, thickness, color);
+    return hovering_cross and isPressed(config.key_bindings.confirm);
 }
 
 fn drawPlus(rect: rl.Rectangle, thickness: f32, color: rl.Color) void {
@@ -572,6 +526,51 @@ fn resizeRectangle(rect: rl.Rectangle, size: rl.Vector2, origin: rl.Vector2) rl.
         .width = size.x,
         .height = size.y,
     };
+}
+
+fn item(rect: rl.Rectangle, texture: ?rl.Texture) enum {
+    select,
+    delete,
+    idle,
+} {
+    const mouse_position = rl.getMousePosition();
+    const hovering_rectangle = rectanglePointCollision(mouse_position, rect);
+
+    const cross_rectangle = resizeRectangle(rect, rl.Vector2.one().scale(40), .{
+        .x = 1, // top right conner
+        .y = 0,
+    });
+    const hovering_cross = rectanglePointCollision(mouse_position, cross_rectangle);
+
+    const border_color = if (hovering_rectangle and !hovering_cross)
+        rl.Color.light_gray
+    else
+        rl.Color.gray;
+    rl.drawRectangleRec(rect, rl.Color.black.alpha(0.6));
+    rl.drawRectangleLinesEx(rect, 3, border_color);
+
+    if (texture) |t| t.drawPro(
+        .{
+            .x = 0,
+            .y = 0,
+            .width = @floatFromInt(t.width),
+            .height = @floatFromInt(t.height),
+        },
+        rect,
+        rl.Vector2.zero(),
+        0,
+        rl.Color.white,
+    );
+
+    if (cross(cross_rectangle, 3)) {
+        return .delete;
+    }
+    if (isPressed(config.key_bindings.confirm)) {
+        if (hovering_rectangle) {
+            return .select;
+        }
+    }
+    return .idle;
 }
 
 fn rectangleSize(rect: rl.Rectangle) rl.Vector2 {
