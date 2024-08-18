@@ -4,27 +4,35 @@ const Allocator = std.mem.Allocator;
 const AssetLoader = @import("AssetLoader.zig");
 const main = @import("main.zig");
 const config = main.config;
-const getAppDataDirEnsurePathExist = main.getAppDataDirEnsurePathExist;
 const is_debug = @import("main.zig").is_debug;
 
 gpa: std.mem.Allocator,
 thread_pool: *std.Thread.Pool,
 asset_loader: AssetLoader,
-drawing_state: union(enum) {
-    idle,
-    drawing,
-    drawing_line: rl.Vector2,
-    eraser,
-    picking_color,
+
+state: union(enum) {
     view_all_images,
+    editing: struct {
+        index: usize,
+        brush_state: union(enum) {
+            idle,
+            drawing,
+            drawing_box: rl.Vector2,
+            eraser,
+            picking_color,
+        },
+    },
 } = .view_all_images,
+
 color_wheel: ColorWheel,
-painting_color: rl.Color,
+brush: struct {
+    radius: f32 = config.line_thickness,
+    color: rl.Color,
+},
 scrolling: struct {
     target: f32 = 0,
     current: f32 = 0,
 } = .{},
-editing: ?usize = null,
 canvas: rl.RenderTexture,
 old_mouse_position: rl.Vector2,
 
@@ -42,9 +50,6 @@ pub fn init(gpa: std.mem.Allocator, thread_pool: *std.Thread.Pool) !Drawer {
     rl.initWindow(0, 0, "Drawer");
     errdefer rl.closeWindow();
 
-    if (config.hide_cursor)
-        rl.hideCursor();
-
     const save_directory = try getAppDataDirEnsurePathExist(gpa, config.app_name);
     defer gpa.free(save_directory);
 
@@ -58,7 +63,9 @@ pub fn init(gpa: std.mem.Allocator, thread_pool: *std.Thread.Pool) !Drawer {
         .thread_pool = thread_pool,
         .asset_loader = asset_loader,
         .color_wheel = .{ .center = rl.Vector2.zero(), .size = 0 },
-        .painting_color = rl.Color.red,
+        .brush = .{
+            .color = rl.Color.red,
+        },
         .canvas = canvas,
         .old_mouse_position = rl.getMousePosition(),
     };
@@ -75,9 +82,12 @@ pub fn run(self: *Drawer) !void {
         try tick(self);
     }
 
-    if (self.editing) |level| {
-        std.log.info("Stored texture {d}", .{level});
-        try self.asset_loader.setTexture(level, self.canvas.texture);
+    switch (self.state) {
+        .editing => |state| {
+            std.log.info("Stored texture {d}", .{state.index});
+            try self.asset_loader.setTexture(state.index, self.canvas.texture);
+        },
+        else => {},
     }
 }
 
@@ -88,128 +98,32 @@ pub fn tick(self: *Drawer) !void {
     const mouse_position = rl.getMousePosition();
     defer self.old_mouse_position = mouse_position;
 
-    if (self.drawing_state == .view_all_images) {
-        var scroll = rl.getMouseWheelMoveV().y;
-        if (std.math.approxEqAbs(f32, scroll, 0, 0.1)) {
-            scroll += @floatFromInt(@intFromBool(isPressed(config.key_bindings.scroll_up)));
-            scroll -= @floatFromInt(@intFromBool(isPressed(config.key_bindings.scroll_down)));
-        }
-        self.scrolling.target -= scroll;
-        self.scrolling.current = expDecayWithAnimationSpeed(self.scrolling.current, self.scrolling.target, rl.getFrameTime());
-        {
-            const number_of_rows_including_add_button = std.math.divCeil(
-                usize,
-                self.asset_loader.images.items.len + 1,
-                config.images_on_one_row,
-            ) catch unreachable;
-
-            self.scrolling.target = std.math.clamp(
-                self.scrolling.target,
-                0,
-                @as(f32, @floatFromInt(number_of_rows_including_add_button - 1)),
-            );
-        }
-    } else {
-        rl.drawTextureRec(self.canvas.texture, .{
-            .x = 0,
-            .y = 0,
-            .width = @as(f32, @floatFromInt(self.canvas.texture.width)),
-            .height = -@as(f32, @floatFromInt(self.canvas.texture.height)), // negative to flip image vertically
-        }, rl.Vector2.zero(), rl.Color.white);
-    }
-
-    self.drawing_state = switch (self.drawing_state) {
-        .idle => if (isDown(config.key_bindings.draw))
-            .drawing
-        else if (isDown(config.key_bindings.draw_line))
-            .{ .drawing_line = mouse_position }
-        else if (isDown(config.key_bindings.eraser))
-            .eraser
-        else if (isPressed(config.key_bindings.picking_color)) blk: {
-            self.color_wheel = .{ .center = mouse_position, .size = 0 };
-            break :blk .picking_color;
-        } else if (isPressed(config.key_bindings.view_all_images)) blk: {
-            if (self.editing) |old_level| {
-                std.log.info("Stored texture {?d}", .{self.editing});
-                try self.asset_loader.setTexture(old_level, self.canvas.texture);
-                self.canvas.begin();
-                rl.clearBackground(rl.Color.blank);
-                self.canvas.end();
-                self.editing = null;
-            }
-            break :blk .view_all_images;
-        } else .idle,
-        .drawing => blk: {
-            self.canvas.begin();
-            rl.drawLineEx(self.old_mouse_position, mouse_position, config.line_thickness, self.painting_color);
-            self.canvas.end();
-            break :blk if (isDown(config.key_bindings.draw))
-                .drawing
-            else
-                .idle;
-        },
-        .eraser => blk: {
-            const radius = config.eraser_thickness / 2;
-            self.canvas.begin();
-
-            {
-                rl.drawCircleV(self.old_mouse_position, radius, rl.Color.white);
-
-                rl.beginBlendMode(.blend_subtract_colors);
-                rl.gl.rlSetBlendFactors(0, 0, 0);
-                {
-                    rl.drawCircleV(self.old_mouse_position, radius, rl.Color.white);
-                }
-                rl.endBlendMode();
-            }
-            {
-                rl.drawCircleV(mouse_position, radius, rl.Color.white);
-
-                rl.beginBlendMode(.blend_subtract_colors);
-                rl.gl.rlSetBlendFactors(0, 0, 0);
-                {
-                    rl.drawCircleV(mouse_position, radius, rl.Color.white);
-                }
-                rl.endBlendMode();
-            }
-            {
-                rl.drawLineEx(self.old_mouse_position, mouse_position, config.eraser_thickness, self.painting_color);
-
-                rl.beginBlendMode(.blend_subtract_colors);
-                rl.gl.rlSetBlendFactors(0, 0, 0);
-                {
-                    rl.drawLineEx(self.old_mouse_position, mouse_position, config.eraser_thickness, self.painting_color);
-                }
-                rl.endBlendMode();
-            }
-            self.canvas.end();
-
-            break :blk if (isDown(config.key_bindings.eraser)) .eraser else .idle;
-        },
-        .drawing_line => |old_position| blk: {
-            drawNiceLine(old_position, mouse_position, config.line_thickness, self.painting_color);
-            if (!isDown(config.key_bindings.draw_line)) {
-                self.canvas.begin();
-                drawNiceLine(old_position, mouse_position, config.line_thickness, self.painting_color);
-                self.canvas.end();
-                break :blk .idle;
-            }
-            break :blk self.drawing_state;
-        },
-        .picking_color => blk: {
-            self.painting_color = self.color_wheel.draw(mouse_position);
-            break :blk if (!isDown(config.key_bindings.picking_color))
-                .idle
-            else {
-                self.color_wheel.size = expDecayWithAnimationSpeed(
-                    self.color_wheel.size,
-                    config.color_wheel_size,
-                    rl.getFrameTime(),
-                );
-                break :blk .picking_color;
-            };
-        },
+    self.state = switch (self.state) {
         .view_all_images => blk: {
+            rl.showCursor();
+
+            // Update scroll position
+            var scroll = rl.getMouseWheelMoveV().y;
+            if (std.math.approxEqAbs(f32, scroll, 0, 0.1)) {
+                scroll += @floatFromInt(@intFromBool(isPressed(config.key_bindings.scroll_up)));
+                scroll -= @floatFromInt(@intFromBool(isPressed(config.key_bindings.scroll_down)));
+            }
+            self.scrolling.target -= scroll;
+            self.scrolling.current = expDecayWithAnimationSpeed(self.scrolling.current, self.scrolling.target, rl.getFrameTime());
+            {
+                const number_of_rows_including_add_button = std.math.divCeil(
+                    usize,
+                    self.asset_loader.images.items.len + 1,
+                    config.images_on_one_row,
+                ) catch unreachable;
+
+                self.scrolling.target = std.math.clamp(
+                    self.scrolling.target,
+                    0,
+                    @as(f32, @floatFromInt(number_of_rows_including_add_button - 1)),
+                );
+            }
+
             if (isPressed(config.key_bindings.new_canvas)) {
                 try self.asset_loader.addTexture(self.canvas.texture);
             }
@@ -261,13 +175,15 @@ pub fn tick(self: *Drawer) !void {
                             try self.asset_loader.removeTexture(index);
                         },
                         .select => {
-                            self.editing = index;
                             std.log.info("Now editing {d} level", .{index});
                             self.canvas.begin();
                             rl.clearBackground(rl.Color.blank);
                             if (maybe_texture) |texture| texture.draw(0, 0, rl.Color.white);
                             self.canvas.end();
-                            break :blk .idle;
+                            break :blk .{ .editing = .{
+                                .index = index,
+                                .brush_state = .idle,
+                            } };
                         },
                     }
                 } else { // Draw add new textures button
@@ -276,30 +192,139 @@ pub fn tick(self: *Drawer) !void {
                     }
                 }
             }
-
             break :blk .view_all_images;
         },
+        .editing => |*state| blk: {
+            rl.hideCursor();
+
+            // Draw canvas texture here so we can draw UI later without problems.
+            // One tick delay in showing results is non issue.
+            rl.drawTextureRec(self.canvas.texture, .{
+                .x = 0,
+                .y = 0,
+                .width = @as(f32, @floatFromInt(self.canvas.texture.width)),
+                .height = -@as(f32, @floatFromInt(self.canvas.texture.height)), // negative to flip image vertically
+            }, rl.Vector2.zero(), rl.Color.white);
+
+            if (isPressed(config.key_bindings.view_all_images)) {
+                std.log.info("Stored texture {?d}", .{state.index});
+                try self.asset_loader.setTexture(state.index, self.canvas.texture);
+                self.canvas.begin();
+                rl.clearBackground(rl.Color.blank);
+                self.canvas.end();
+                break :blk .view_all_images;
+            }
+            state.brush_state = switch (state.brush_state) {
+                .idle => if (isDown(config.key_bindings.draw))
+                    .drawing
+                else if (isDown(config.key_bindings.draw_line))
+                    .{ .drawing_box = mouse_position }
+                else if (isDown(config.key_bindings.eraser))
+                    .eraser
+                else if (isPressed(config.key_bindings.picking_color)) state: {
+                    self.color_wheel = .{ .center = mouse_position, .size = 0 };
+                    break :state .picking_color;
+                } else .idle,
+                .drawing => state: {
+                    self.canvas.begin();
+                    rl.drawLineEx(self.old_mouse_position, mouse_position, self.brush.radius, self.brush.color);
+                    self.canvas.end();
+                    break :state if (isDown(config.key_bindings.draw))
+                        .drawing
+                    else
+                        .idle;
+                },
+                .eraser => state: {
+                    const radius = config.eraser_thickness / 2;
+                    self.canvas.begin();
+
+                    {
+                        rl.drawCircleV(self.old_mouse_position, radius, rl.Color.white);
+
+                        rl.beginBlendMode(.blend_subtract_colors);
+                        rl.gl.rlSetBlendFactors(0, 0, 0);
+                        {
+                            rl.drawCircleV(self.old_mouse_position, radius, rl.Color.white);
+                        }
+                        rl.endBlendMode();
+                    }
+                    {
+                        rl.drawCircleV(mouse_position, radius, rl.Color.white);
+
+                        rl.beginBlendMode(.blend_subtract_colors);
+                        rl.gl.rlSetBlendFactors(0, 0, 0);
+                        {
+                            rl.drawCircleV(mouse_position, radius, rl.Color.white);
+                        }
+                        rl.endBlendMode();
+                    }
+                    {
+                        rl.drawLineEx(self.old_mouse_position, mouse_position, config.eraser_thickness, self.brush.color);
+
+                        rl.beginBlendMode(.blend_subtract_colors);
+                        rl.gl.rlSetBlendFactors(0, 0, 0);
+                        {
+                            rl.drawLineEx(self.old_mouse_position, mouse_position, config.eraser_thickness, self.brush.color);
+                        }
+                        rl.endBlendMode();
+                    }
+                    self.canvas.end();
+
+                    break :state if (isDown(config.key_bindings.eraser)) .eraser else .idle;
+                },
+                .drawing_box => |old_position| state: {
+                    const size = mouse_position.subtract(old_position);
+                    const rect = rl.Rectangle{
+                        .x = old_position.x + @min(0, size.x),
+                        .y = old_position.y + @min(0, size.y),
+                        .width = @abs(size.x),
+                        .height = @abs(size.y),
+                    };
+                    rl.drawRectangleLinesEx(rect, self.brush.radius, self.brush.color);
+                    if (!isDown(config.key_bindings.draw_line)) {
+                        self.canvas.begin();
+                        rl.drawRectangleLinesEx(rect, self.brush.radius, self.brush.color);
+                        self.canvas.end();
+                        break :state .idle;
+                    }
+                    break :state state.brush_state;
+                },
+                .picking_color => state: {
+                    self.brush.color = self.color_wheel.draw(mouse_position);
+                    break :state if (!isDown(config.key_bindings.picking_color))
+                        .idle
+                    else {
+                        self.color_wheel.size = expDecayWithAnimationSpeed(
+                            self.color_wheel.size,
+                            config.color_wheel_size,
+                            rl.getFrameTime(),
+                        );
+                        break :state .picking_color;
+                    };
+                },
+            };
+
+            // Shrink color picker
+            if (state.brush_state != .picking_color) {
+                self.color_wheel.size = expDecayWithAnimationSpeed(self.color_wheel.size, 0, rl.getFrameTime());
+                _ = self.color_wheel.draw(mouse_position);
+            }
+            // Draw cursor
+            if (state.brush_state == .eraser) {
+                rl.drawCircleLinesV(mouse_position, config.eraser_thickness / 2, self.brush.color);
+            } else {
+                rl.drawCircleV(mouse_position, self.brush.radius * 2, self.brush.color);
+            }
+            // Clear screen
+            if (isDown(config.key_bindings.clear)) {
+                self.canvas.begin();
+                rl.clearBackground(rl.Color.blank);
+                self.canvas.end();
+            }
+
+            break :blk self.state;
+        },
     };
-
-    // Shrink color picker
-    if (self.drawing_state != .picking_color) {
-        self.color_wheel.size = expDecayWithAnimationSpeed(self.color_wheel.size, 0, rl.getFrameTime());
-        _ = self.color_wheel.draw(mouse_position);
-    }
-
-    // Clear screen
-    if (isDown(config.key_bindings.clear)) {
-        self.canvas.begin();
-        rl.clearBackground(rl.Color.blank);
-        self.canvas.end();
-    }
-
-    // Draw cursor
-    if (self.drawing_state == .eraser) {
-        rl.drawCircleLinesV(mouse_position, config.eraser_thickness / 2, self.painting_color);
-    } else {
-        rl.drawCircleV(mouse_position, config.line_thickness * 2, self.painting_color);
-    }
 
     if (@import("builtin").mode == .Debug)
         rl.drawFPS(0, 0);
@@ -373,7 +398,8 @@ const ColorWheel = struct {
                 rl.Color.fromHSV(hue, 0.8, 0.8),
             );
         }
-        return rl.Color.fromHSV(-wheel.center.lineAngle(pos) / std.math.tau * 360, 1, 1);
+        const distance = @min(wheel.center.distance(pos) / wheel.size, 1);
+        return rl.Color.fromHSV(-wheel.center.lineAngle(pos) / std.math.tau * 360, distance, 1);
     }
 };
 
@@ -555,4 +581,14 @@ fn rectangleSize(rect: rl.Rectangle) rl.Vector2 {
 fn flushRaylib() void {
     rl.beginMode2D(std.mem.zeroes(rl.Camera2D));
     rl.endMode2D();
+}
+
+fn getAppDataDirEnsurePathExist(alloc: std.mem.Allocator, appname: []const u8) ![]u8 {
+    const data_dir_path = try std.fs.getAppDataDir(alloc, appname);
+
+    std.fs.makeDirAbsolute(data_dir_path) catch |e| switch (e) {
+        error.PathAlreadyExists => {},
+        else => |err| return err,
+    };
+    return data_dir_path;
 }

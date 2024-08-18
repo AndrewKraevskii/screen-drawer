@@ -33,7 +33,6 @@ pub const config = struct {
     /// Set to null to disable animations.
     pub const animation_speed: ?comptime_int = 10;
 
-    pub const hide_cursor = true;
     pub const line_thickness = 4;
     pub const eraser_thickness = 40;
     pub const color_wheel_size = 100;
@@ -59,16 +58,6 @@ pub fn main() !void {
     var drawer = try Drawer.init(gpa_impl.allocator(), &thread_pool);
     try drawer.run();
     drawer.deinit();
-}
-
-pub fn getAppDataDirEnsurePathExist(alloc: std.mem.Allocator, appname: []const u8) ![]u8 {
-    const data_dir_path = try std.fs.getAppDataDir(alloc, appname);
-
-    std.fs.makeDirAbsolute(data_dir_path) catch |e| switch (e) {
-        error.PathAlreadyExists => {},
-        else => |err| return err,
-    };
-    return data_dir_path;
 }
 
 test {
