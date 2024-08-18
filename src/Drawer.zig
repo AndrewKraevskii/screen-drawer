@@ -3,13 +3,12 @@ const rl = @import("raylib");
 const Allocator = std.mem.Allocator;
 const AssetLoader = @import("AssetLoader.zig");
 const main = @import("main.zig");
-const getAppDataDirEnsurePathExist = main.getAppDataDirEnsurePathExist;
 const config = main.config;
-const is_debug = @import("builtin").mode == .Debug;
+const getAppDataDirEnsurePathExist = main.getAppDataDirEnsurePathExist;
+const is_debug = @import("main.zig").is_debug;
 
 gpa: std.mem.Allocator,
 thread_pool: *std.Thread.Pool,
-save_directory: []const u8,
 asset_loader: AssetLoader,
 drawing_state: union(enum) {
     idle,
@@ -21,15 +20,17 @@ drawing_state: union(enum) {
 } = .view_all_images,
 color_wheel: ColorWheel,
 painting_color: rl.Color,
-editing: ?usize = null,
 scrolling: struct {
     target: f32 = 0,
     current: f32 = 0,
 } = .{},
+editing: ?usize = null,
 canvas: rl.RenderTexture,
 old_mouse_position: rl.Vector2,
 
-pub fn init(gpa: std.mem.Allocator, thread_pool: *std.Thread.Pool) !@This() {
+const Drawer = @This();
+
+pub fn init(gpa: std.mem.Allocator, thread_pool: *std.Thread.Pool) !Drawer {
     rl.setConfigFlags(.{
         .window_topmost = true,
         .window_transparent = true,
@@ -37,23 +38,23 @@ pub fn init(gpa: std.mem.Allocator, thread_pool: *std.Thread.Pool) !@This() {
         .window_maximized = true,
         .vsync_hint = true,
     });
-
     rl.setTraceLogLevel(if (is_debug) .log_debug else .log_warning);
-
     rl.initWindow(0, 0, "Drawer");
-    if (main.config.hide_cursor)
+    errdefer rl.closeWindow();
+
+    if (config.hide_cursor)
         rl.hideCursor();
 
     const save_directory = try getAppDataDirEnsurePathExist(gpa, config.app_name);
+    defer gpa.free(save_directory);
 
     const asset_loader = try AssetLoader.init(gpa, thread_pool, save_directory);
 
-    const width: u31 = @intCast(rl.getScreenWidth());
-    const height: u31 = @intCast(rl.getScreenHeight());
+    const width: i32 = rl.getScreenWidth();
+    const height: i32 = rl.getScreenHeight();
     const canvas = rl.loadRenderTexture(width, height);
     return .{
         .gpa = gpa,
-        .save_directory = save_directory,
         .thread_pool = thread_pool,
         .asset_loader = asset_loader,
         .color_wheel = .{ .center = rl.Vector2.zero(), .size = 0 },
@@ -63,14 +64,13 @@ pub fn init(gpa: std.mem.Allocator, thread_pool: *std.Thread.Pool) !@This() {
     };
 }
 
-pub fn deinit(self: *@This()) void {
-    self.gpa.free(self.save_directory);
+pub fn deinit(self: *Drawer) void {
     self.asset_loader.deinit();
     self.canvas.unload();
     rl.closeWindow();
 }
 
-pub fn run(self: *@This()) !void {
+pub fn run(self: *Drawer) !void {
     while (!rl.windowShouldClose() and rl.isWindowFocused()) {
         try tick(self);
     }
@@ -81,7 +81,7 @@ pub fn run(self: *@This()) !void {
     }
 }
 
-pub fn tick(self: *@This()) !void {
+pub fn tick(self: *Drawer) !void {
     rl.beginDrawing();
     rl.clearBackground(rl.Color.blank);
 
@@ -96,6 +96,19 @@ pub fn tick(self: *@This()) !void {
         }
         self.scrolling.target -= scroll;
         self.scrolling.current = expDecayWithAnimationSpeed(self.scrolling.current, self.scrolling.target, rl.getFrameTime());
+        {
+            const number_of_rows_including_add_button = std.math.divCeil(
+                usize,
+                self.asset_loader.images.items.len + 1,
+                config.images_on_one_row,
+            ) catch unreachable;
+
+            self.scrolling.target = std.math.clamp(
+                self.scrolling.target,
+                0,
+                @as(f32, @floatFromInt(number_of_rows_including_add_button - 1)),
+            );
+        }
     } else {
         rl.drawTextureRec(self.canvas.texture, .{
             .x = 0,
@@ -190,7 +203,7 @@ pub fn tick(self: *@This()) !void {
             else {
                 self.color_wheel.size = expDecayWithAnimationSpeed(
                     self.color_wheel.size,
-                    config.wheel_target_size,
+                    config.color_wheel_size,
                     rl.getFrameTime(),
                 );
                 break :blk .picking_color;
@@ -200,33 +213,30 @@ pub fn tick(self: *@This()) !void {
             if (isPressed(config.key_bindings.new_canvas)) {
                 try self.asset_loader.addTexture(self.canvas.texture);
             }
-            const padding = rl.Vector2.one().scale(50);
-            const screen_size = rl.Vector2.init(@floatFromInt(rl.getScreenWidth()), @floatFromInt(rl.getScreenHeight()));
+            const padding = rl.Vector2.one().scale(30);
 
-            const images_on_one_row = 4;
+            const texture_size = size: {
+                const screen_size = rl.Vector2.init(
+                    @floatFromInt(rl.getScreenWidth()),
+                    @floatFromInt(rl.getScreenHeight()),
+                );
+                break :size screen_size
+                    .subtract(padding)
+                    .scale(1.0 / @as(f32, @floatFromInt(config.images_on_one_row)))
+                    .subtract(padding);
+            };
 
-            const texture_size = screen_size.subtract(padding).scale(1.0 / @as(f32, @floatFromInt(images_on_one_row))).subtract(padding);
-            const start_image: usize = @as(usize, @intFromFloat(@floor(@max(0, self.scrolling.current)))) * images_on_one_row;
-            const num_of_images = self.asset_loader.images.items.len;
-            const number_of_rows_including_add_button = std.math.divCeil(
+            const start_image = @as(
                 usize,
-                num_of_images + 1,
-                images_on_one_row,
-            ) catch unreachable;
+                @intFromFloat(@floor(@max(0, self.scrolling.current))),
+            ) * config.images_on_one_row;
+            const images_to_display = config.images_on_one_row * config.images_on_one_row * 2;
 
-            self.scrolling.target = std.math.clamp(
-                self.scrolling.target,
-                0,
-                @as(f32, @floatFromInt(number_of_rows_including_add_button - 1)),
-            );
-
-            const images_to_display = images_on_one_row * images_on_one_row * 2;
-
-            var index: usize = @intCast(@max(0, start_image));
+            var index = start_image;
             while (index <= @min(start_image + images_to_display, self.asset_loader.images.items.len)) : (index += 1) {
                 const rect: rl.Rectangle = rect: {
-                    const col = index % images_on_one_row;
-                    const row = @as(f32, @floatFromInt(index / images_on_one_row)) - self.scrolling.current;
+                    const col = index % config.images_on_one_row;
+                    const row = @as(f32, @floatFromInt(index / config.images_on_one_row)) - self.scrolling.current;
                     const pos = padding.add(
                         rl.Vector2.init(@floatFromInt(col), row)
                             .multiply(texture_size.add(padding)),
@@ -260,8 +270,8 @@ pub fn tick(self: *@This()) !void {
                             break :blk .idle;
                         },
                     }
-                } else { // Draw add new textures
-                    if (gui.new(rect)) {
+                } else { // Draw add new textures button
+                    if (gui.add(rect)) {
                         try self.asset_loader.addTexture(self.canvas.texture);
                     }
                 }
@@ -270,16 +280,21 @@ pub fn tick(self: *@This()) !void {
             break :blk .view_all_images;
         },
     };
+
+    // Shrink color picker
     if (self.drawing_state != .picking_color) {
         self.color_wheel.size = expDecayWithAnimationSpeed(self.color_wheel.size, 0, rl.getFrameTime());
         _ = self.color_wheel.draw(mouse_position);
     }
 
+    // Clear screen
     if (isDown(config.key_bindings.clear)) {
         self.canvas.begin();
         rl.clearBackground(rl.Color.blank);
         self.canvas.end();
     }
+
+    // Draw cursor
     if (self.drawing_state == .eraser) {
         rl.drawCircleLinesV(mouse_position, config.eraser_thickness / 2, self.painting_color);
     } else {
@@ -288,6 +303,7 @@ pub fn tick(self: *@This()) !void {
 
     if (@import("builtin").mode == .Debug)
         rl.drawFPS(0, 0);
+
     rl.endDrawing();
 }
 
@@ -336,6 +352,7 @@ fn isModifierKey(key: rl.KeyboardKey) bool {
         else => false,
     };
 }
+
 const ColorWheel = struct {
     center: rl.Vector2,
     size: f32,
@@ -403,7 +420,7 @@ const gui = struct {
         }, thickness, color);
     }
 
-    fn new(rect: rl.Rectangle) bool {
+    fn add(rect: rl.Rectangle) bool {
         const hovering_rectangle = rectanglePointCollision(rl.getMousePosition(), rect);
 
         rl.drawRectangleLinesEx(rect, 3, if (hovering_rectangle)

@@ -36,7 +36,8 @@ pub const config = struct {
     pub const hide_cursor = true;
     pub const line_thickness = 4;
     pub const eraser_thickness = 40;
-    pub const wheel_target_size = 100;
+    pub const color_wheel_size = 100;
+    pub const images_on_one_row = 4;
 };
 
 pub const is_debug = @import("builtin").mode == .Debug;
