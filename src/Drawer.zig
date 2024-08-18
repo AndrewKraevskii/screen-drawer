@@ -23,7 +23,7 @@ color_wheel: ColorWheel,
 painting_color: rl.Color,
 editing: ?usize = null,
 scrolling: struct {
-    target: i32 = 0,
+    target: f32 = 0,
     current: f32 = 0,
 } = .{},
 canvas: rl.RenderTexture,
@@ -88,26 +88,22 @@ pub fn tick(self: *@This()) !void {
     const mouse_position = rl.getMousePosition();
     defer self.old_mouse_position = mouse_position;
 
-    const mouse_scroll = switch (std.math.order(rl.getMouseWheelMoveV().y, 0.0)) {
-        .eq => if (isPressed(config.key_bindings.scroll_up)) std.math.Order.gt else if (isPressed(config.key_bindings.scroll_down)) std.math.Order.lt else std.math.Order.eq,
-        else => |other| other,
-    };
-
-    switch (mouse_scroll) {
-        .lt => self.scrolling.target += 1,
-        .gt => self.scrolling.target -|= 1,
-        .eq => {},
-    }
-
-    self.scrolling.current = expDecayWithAnimationSpeed(self.scrolling.current, @floatFromInt(self.scrolling.target), rl.getFrameTime());
-
-    if (self.drawing_state != .view_all_images)
+    if (self.drawing_state == .view_all_images) {
+        var scroll = rl.getMouseWheelMoveV().y;
+        if (std.math.approxEqAbs(f32, scroll, 0, 0.1)) {
+            scroll += @floatFromInt(@intFromBool(isPressed(config.key_bindings.scroll_up)));
+            scroll -= @floatFromInt(@intFromBool(isPressed(config.key_bindings.scroll_down)));
+        }
+        self.scrolling.target -= scroll;
+        self.scrolling.current = expDecayWithAnimationSpeed(self.scrolling.current, self.scrolling.target, rl.getFrameTime());
+    } else {
         rl.drawTextureRec(self.canvas.texture, .{
             .x = 0,
             .y = 0,
             .width = @as(f32, @floatFromInt(self.canvas.texture.width)),
             .height = -@as(f32, @floatFromInt(self.canvas.texture.height)), // negative to flip image vertically
         }, rl.Vector2.zero(), rl.Color.white);
+    }
 
     self.drawing_state = switch (self.drawing_state) {
         .idle => if (isDown(config.key_bindings.draw))
@@ -210,20 +206,20 @@ pub fn tick(self: *@This()) !void {
             const images_on_one_row = 4;
 
             const texture_size = screen_size.subtract(padding).scale(1.0 / @as(f32, @floatFromInt(images_on_one_row))).subtract(padding);
-            const start_image: usize = @min(@abs(@max(0, self.scrolling.target)), @as(usize, @intFromFloat(@max(@floor(self.scrolling.current), 0))) -| 1) * images_on_one_row;
-            if (self.scrolling.target < 0) {
-                self.scrolling.target = 0;
-            }
-
+            const start_image: usize = @as(usize, @intFromFloat(@floor(@max(0, self.scrolling.current)))) * images_on_one_row;
             const num_of_images = self.asset_loader.images.items.len;
             const number_of_rows_including_add_button = std.math.divCeil(
                 usize,
                 num_of_images + 1,
                 images_on_one_row,
             ) catch unreachable;
-            if (self.scrolling.target >= number_of_rows_including_add_button) {
-                self.scrolling.target = @intCast(number_of_rows_including_add_button - 1);
-            }
+
+            self.scrolling.target = std.math.clamp(
+                self.scrolling.target,
+                0,
+                @as(f32, @floatFromInt(number_of_rows_including_add_button - 1)),
+            );
+
             const images_to_display = images_on_one_row * images_on_one_row * 2;
 
             var index: usize = @intCast(@max(0, start_image));
