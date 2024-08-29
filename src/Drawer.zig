@@ -7,38 +7,133 @@ const config = main.config;
 const is_debug = @import("main.zig").is_debug;
 
 gpa: std.mem.Allocator,
-thread_pool: *std.Thread.Pool,
-asset_loader: AssetLoader,
 
 state: union(enum) {
-    view_all_images,
     editing: struct {
         index: usize,
         brush_state: union(enum) {
             idle,
             drawing,
-            drawing_box: rl.Vector2,
             eraser,
             picking_color,
         },
     },
-} = .view_all_images,
+},
 
 color_wheel: ColorWheel,
 brush: struct {
     radius: f32 = config.line_thickness,
     color: rl.Color,
 },
-scrolling: struct {
-    target: f32 = 0,
-    current: f32 = 0,
-} = .{},
-canvas: rl.RenderTexture,
+
+strokes: std.ArrayListUnmanaged(Stroke) = .{},
+segments: std.ArrayListUnmanaged([2]rl.Vector2) = .{},
+history: History = .{},
+
 old_mouse_position: rl.Vector2,
+
+const History = struct {
+    events: std.ArrayListUnmanaged(Entry) = .{},
+    undone: usize = 0,
+
+    const Entry = union(enum) {
+        drawn: usize,
+        erased: usize,
+    };
+
+    fn undo(history: *History, strokes: *std.ArrayListUnmanaged(Stroke)) bool {
+        std.debug.assert(history.undone <= history.events.items.len);
+        if (history.undone == history.events.items.len) {
+            return false;
+        }
+        history.undone += 1;
+        const event_to_undo = history.events.items[history.events.items.len - history.undone];
+
+        switch (event_to_undo) {
+            .drawn => |index| {
+                strokes.items[index].is_active = false;
+            },
+            .erased => |index| {
+                strokes.items[index].is_active = true;
+            },
+        }
+        return true;
+    }
+
+    fn redo(history: *History, strokes: *std.ArrayListUnmanaged(Stroke)) bool {
+        if (history.undone == 0) return false;
+        const event_to_redo = history.events.items[history.events.items.len - history.undone];
+        history.undone -= 1;
+        switch (event_to_redo) {
+            .drawn => |index| {
+                strokes.items[index].is_active = true;
+            },
+            .erased => |index| {
+                strokes.items[index].is_active = false;
+            },
+        }
+        return true;
+    }
+
+    fn debugDraw(history: History, pos: rl.Vector2) void {
+        const font_size = 20;
+        const y_spacing = 10;
+        for (history.events.items, 0..) |entry, index| {
+            const alpha: f32 = if (index >= history.events.items.len - history.undone) 0.4 else 1;
+            var buffer: [100]u8 = undefined;
+            const y_offset: f32 = (font_size + y_spacing) * @as(f32, @floatFromInt(index));
+            switch (entry) {
+                .drawn => |i| {
+                    rl.drawTextEx(rl.getFontDefault(), std.fmt.bufPrintZ(&buffer, "drawn {d}", .{i}) catch unreachable, pos.add(.{
+                        .x = 0,
+                        .y = y_offset,
+                    }), font_size, 2, rl.Color.green.alpha(alpha));
+                },
+                .erased => |i| {
+                    rl.drawTextEx(rl.getFontDefault(), std.fmt.bufPrintZ(&buffer, "erased {d}", .{i}) catch unreachable, pos.add(.{
+                        .x = 0,
+                        .y = y_offset,
+                    }), font_size, 2, rl.Color.red.alpha(alpha));
+                },
+            }
+        }
+    }
+
+    fn addHistoryEntry(
+        history: *History,
+        gpa: Allocator,
+        entry: Entry,
+    ) !void {
+        if (history.undone != 0) {
+            history.events.shrinkRetainingCapacity(history.events.items.len - history.undone);
+            history.undone = 0;
+        }
+
+        try history.events.append(
+            gpa,
+            entry,
+        );
+    }
+
+    fn deinit(history: *History, gpa: Allocator) void {
+        history.events.deinit(gpa);
+    }
+};
+
+const Stroke = struct {
+    is_active: bool = true,
+    span: Span,
+    color: rl.Color,
+};
+
+const Span = struct {
+    start: usize,
+    size: usize,
+};
 
 const Drawer = @This();
 
-pub fn init(gpa: std.mem.Allocator, thread_pool: *std.Thread.Pool) !Drawer {
+pub fn init(gpa: std.mem.Allocator) !Drawer {
     rl.setConfigFlags(.{
         .window_topmost = true,
         .window_transparent = true,
@@ -53,41 +148,32 @@ pub fn init(gpa: std.mem.Allocator, thread_pool: *std.Thread.Pool) !Drawer {
     const save_directory = try getAppDataDirEnsurePathExist(gpa, config.app_name);
     defer gpa.free(save_directory);
 
-    const asset_loader = try AssetLoader.init(gpa, thread_pool, save_directory);
-
-    const width: i32 = rl.getScreenWidth();
-    const height: i32 = rl.getScreenHeight();
-    const canvas = rl.loadRenderTexture(width, height);
     return .{
         .gpa = gpa,
-        .thread_pool = thread_pool,
-        .asset_loader = asset_loader,
         .color_wheel = .{ .center = rl.Vector2.zero(), .size = 0 },
         .brush = .{
             .color = rl.Color.red,
         },
-        .canvas = canvas,
         .old_mouse_position = rl.getMousePosition(),
+        .state = .{
+            .editing = .{
+                .index = 0,
+                .brush_state = .idle,
+            },
+        },
     };
 }
 
 pub fn deinit(self: *Drawer) void {
-    self.asset_loader.deinit();
-    self.canvas.unload();
+    self.strokes.deinit(self.gpa);
+    self.history.deinit(self.gpa);
+    self.segments.deinit(self.gpa);
     rl.closeWindow();
 }
 
 pub fn run(self: *Drawer) !void {
-    while (!rl.windowShouldClose() and rl.isWindowFocused()) {
+    while (!rl.windowShouldClose() and (!config.exit_on_unfocus or rl.isWindowFocused())) {
         try tick(self);
-    }
-
-    switch (self.state) {
-        .editing => |state| {
-            std.log.info("Stored texture {d}", .{state.index});
-            try self.asset_loader.setTexture(state.index, self.canvas.texture);
-        },
-        else => {},
     }
 }
 
@@ -99,136 +185,56 @@ pub fn tick(self: *Drawer) !void {
     defer self.old_mouse_position = mouse_position;
 
     self.state = switch (self.state) {
-        .view_all_images => blk: {
-            rl.showCursor();
-
-            // Update scroll position
-            var scroll = rl.getMouseWheelMoveV().y;
-            if (std.math.approxEqAbs(f32, scroll, 0, 0.1)) {
-                scroll += @floatFromInt(@intFromBool(isPressed(config.key_bindings.scroll_up)));
-                scroll -= @floatFromInt(@intFromBool(isPressed(config.key_bindings.scroll_down)));
-            }
-            self.scrolling.target -= scroll;
-            self.scrolling.current = expDecayWithAnimationSpeed(self.scrolling.current, self.scrolling.target, rl.getFrameTime());
-            {
-                const number_of_rows_including_add_button = std.math.divCeil(
-                    usize,
-                    self.asset_loader.images.items.len + 1,
-                    config.images_on_one_row,
-                ) catch unreachable;
-
-                self.scrolling.target = std.math.clamp(
-                    self.scrolling.target,
-                    0,
-                    @as(f32, @floatFromInt(number_of_rows_including_add_button - 1)),
-                );
-            }
-
-            if (isPressed(config.key_bindings.new_canvas)) {
-                try self.asset_loader.addTexture(self.canvas.texture);
-            }
-            const padding = rl.Vector2.one().scale(30);
-
-            const texture_size = size: {
-                const screen_size = rl.Vector2.init(
-                    @floatFromInt(rl.getScreenWidth()),
-                    @floatFromInt(rl.getScreenHeight()),
-                );
-                break :size screen_size
-                    .subtract(padding)
-                    .scale(1.0 / @as(f32, @floatFromInt(config.images_on_one_row)))
-                    .subtract(padding);
-            };
-
-            const start_image = @as(
-                usize,
-                @intFromFloat(@floor(@max(0, self.scrolling.current))),
-            ) * config.images_on_one_row;
-            const images_to_display = config.images_on_one_row * config.images_on_one_row * 2;
-
-            var index = start_image;
-            while (index <= @min(start_image + images_to_display, self.asset_loader.images.items.len)) : (index += 1) {
-                const rect: rl.Rectangle = rect: {
-                    const col = index % config.images_on_one_row;
-                    const row = @as(f32, @floatFromInt(index / config.images_on_one_row)) - self.scrolling.current;
-                    const pos = padding.add(
-                        rl.Vector2.init(@floatFromInt(col), row)
-                            .multiply(texture_size.add(padding)),
-                    );
-                    const border_size = rl.Vector2{ .x = 10, .y = 10 };
-                    const backdrop_size = texture_size.add(border_size.scale(2));
-                    const backdrop_pos = pos.subtract(border_size);
-                    break :rect .{
-                        .x = backdrop_pos.x,
-                        .y = backdrop_pos.y,
-                        .width = backdrop_size.x,
-                        .height = backdrop_size.y,
-                    };
-                };
-                if (index != self.asset_loader.images.items.len) {
-                    const maybe_texture = self.asset_loader.getTexture(index);
-                    switch (gui.item(rect, maybe_texture)) {
-                        .idle => {},
-                        .delete => {
-                            // flush or else texture removing would case raylib to draw wrong texture.
-                            flushRaylib();
-                            try self.asset_loader.removeTexture(index);
-                        },
-                        .select => {
-                            std.log.info("Now editing {d} level", .{index});
-                            self.canvas.begin();
-                            rl.clearBackground(rl.Color.blank);
-                            if (maybe_texture) |texture| texture.draw(0, 0, rl.Color.white);
-                            self.canvas.end();
-                            break :blk .{ .editing = .{
-                                .index = index,
-                                .brush_state = .idle,
-                            } };
-                        },
-                    }
-                } else { // Draw add new textures button
-                    if (gui.add(rect)) {
-                        try self.asset_loader.addTexture(self.canvas.texture);
-                    }
-                }
-            }
-            break :blk .view_all_images;
-        },
         .editing => |*state| blk: {
             rl.hideCursor();
 
-            // Draw canvas texture here so we can draw UI later without problems.
-            // One tick delay in showing results is non issue.
-            rl.drawTextureRec(self.canvas.texture, .{
-                .x = 0,
-                .y = 0,
-                .width = @as(f32, @floatFromInt(self.canvas.texture.width)),
-                .height = -@as(f32, @floatFromInt(self.canvas.texture.height)), // negative to flip image vertically
-            }, rl.Vector2.zero(), rl.Color.white);
-
-            if (isPressed(config.key_bindings.view_all_images)) {
-                std.log.info("Stored texture {?d}", .{state.index});
-                try self.asset_loader.setTexture(state.index, self.canvas.texture);
-                self.canvas.begin();
-                rl.clearBackground(rl.Color.blank);
-                self.canvas.end();
-                break :blk .view_all_images;
+            for (self.strokes.items) |stroke| {
+                if (stroke.is_active) {
+                    for (self.segments.items[stroke.span.start..][0..stroke.span.size]) |line| {
+                        rl.drawLineEx(line[0], line[1], self.brush.radius, stroke.color);
+                    }
+                }
             }
+            if (isPressed(config.key_bindings.undo))
+                _ = self.history.undo(&self.strokes);
+            if (isPressed(config.key_bindings.redo))
+                _ = self.history.redo(&self.strokes);
+
             state.brush_state = switch (state.brush_state) {
-                .idle => if (isDown(config.key_bindings.draw))
-                    .drawing
-                else if (isDown(config.key_bindings.draw_line))
-                    .{ .drawing_box = mouse_position }
-                else if (isDown(config.key_bindings.eraser))
+                .idle => if (isDown(config.key_bindings.draw)) state: {
+                    try self.history.addHistoryEntry(self.gpa, .{ .drawn = self.strokes.items.len });
+
+                    try self.strokes.append(self.gpa, .{ .span = .{
+                        .start = self.segments.items.len,
+                        .size = 0,
+                    }, .color = self.brush.color });
+                    break :state .drawing;
+                } else if (isDown(config.key_bindings.eraser))
                     .eraser
                 else if (isPressed(config.key_bindings.picking_color)) state: {
                     self.color_wheel = .{ .center = mouse_position, .size = 0 };
                     break :state .picking_color;
                 } else .idle,
+
                 .drawing => state: {
-                    self.canvas.begin();
-                    rl.drawLineEx(self.old_mouse_position, mouse_position, self.brush.radius, self.brush.color);
-                    self.canvas.end();
+                    if (self.strokes.items.len == 0) {
+                        try self.strokes.append(self.gpa, .{
+                            .span = .{
+                                .start = 0,
+                                .size = 0,
+                            },
+                            .color = self.brush.color,
+                        });
+                    }
+
+                    self.strokes.items[self.strokes.items.len - 1].span.size += 1;
+                    self.strokes.items[self.strokes.items.len - 1].color = self.brush.color;
+
+                    try self.segments.append(self.gpa, .{
+                        self.old_mouse_position,
+                        rl.getMousePosition(),
+                    });
+
                     break :state if (isDown(config.key_bindings.draw))
                         .drawing
                     else
@@ -236,58 +242,20 @@ pub fn tick(self: *Drawer) !void {
                 },
                 .eraser => state: {
                     const radius = config.eraser_thickness / 2;
-                    self.canvas.begin();
 
-                    {
-                        rl.drawCircleV(self.old_mouse_position, radius, rl.Color.white);
-
-                        rl.beginBlendMode(.blend_subtract_colors);
-                        rl.gl.rlSetBlendFactors(0, 0, 0);
-                        {
-                            rl.drawCircleV(self.old_mouse_position, radius, rl.Color.white);
+                    for (self.strokes.items, 0..) |*stroke, index| {
+                        if (stroke.is_active) {
+                            for (self.segments.items[stroke.span.start..][0..stroke.span.size]) |line| {
+                                if (rl.checkCollisionCircleLine(rl.getMousePosition(), radius, line[0], line[1])) {
+                                    try self.history.addHistoryEntry(self.gpa, .{ .erased = index });
+                                    stroke.is_active = false;
+                                    break;
+                                }
+                            }
                         }
-                        rl.endBlendMode();
                     }
-                    {
-                        rl.drawCircleV(mouse_position, radius, rl.Color.white);
-
-                        rl.beginBlendMode(.blend_subtract_colors);
-                        rl.gl.rlSetBlendFactors(0, 0, 0);
-                        {
-                            rl.drawCircleV(mouse_position, radius, rl.Color.white);
-                        }
-                        rl.endBlendMode();
-                    }
-                    {
-                        rl.drawLineEx(self.old_mouse_position, mouse_position, config.eraser_thickness, self.brush.color);
-
-                        rl.beginBlendMode(.blend_subtract_colors);
-                        rl.gl.rlSetBlendFactors(0, 0, 0);
-                        {
-                            rl.drawLineEx(self.old_mouse_position, mouse_position, config.eraser_thickness, self.brush.color);
-                        }
-                        rl.endBlendMode();
-                    }
-                    self.canvas.end();
 
                     break :state if (isDown(config.key_bindings.eraser)) .eraser else .idle;
-                },
-                .drawing_box => |old_position| state: {
-                    const size = mouse_position.subtract(old_position);
-                    const rect = rl.Rectangle{
-                        .x = old_position.x + @min(0, size.x),
-                        .y = old_position.y + @min(0, size.y),
-                        .width = @abs(size.x),
-                        .height = @abs(size.y),
-                    };
-                    rl.drawRectangleLinesEx(rect, self.brush.radius, self.brush.color);
-                    if (!isDown(config.key_bindings.draw_line)) {
-                        self.canvas.begin();
-                        rl.drawRectangleLinesEx(rect, self.brush.radius, self.brush.color);
-                        self.canvas.end();
-                        break :state .idle;
-                    }
-                    break :state state.brush_state;
                 },
                 .picking_color => state: {
                     self.brush.color = self.color_wheel.draw(mouse_position);
@@ -304,6 +272,11 @@ pub fn tick(self: *Drawer) !void {
                 },
             };
 
+            self.history.debugDraw(.{
+                .x = 20,
+                .y = 10,
+            });
+
             // Shrink color picker
             if (state.brush_state != .picking_color) {
                 self.color_wheel.size = expDecayWithAnimationSpeed(self.color_wheel.size, 0, rl.getFrameTime());
@@ -314,12 +287,6 @@ pub fn tick(self: *Drawer) !void {
                 rl.drawCircleLinesV(mouse_position, config.eraser_thickness / 2, self.brush.color);
             } else {
                 rl.drawCircleV(mouse_position, self.brush.radius * 2, self.brush.color);
-            }
-            // Clear screen
-            if (isDown(config.key_bindings.clear)) {
-                self.canvas.begin();
-                rl.clearBackground(rl.Color.blank);
-                self.canvas.end();
             }
 
             break :blk self.state;
@@ -383,6 +350,7 @@ const ColorWheel = struct {
     size: f32,
 
     pub fn draw(wheel: ColorWheel, pos: rl.Vector2) rl.Color {
+        if (wheel.size < 0.01) return rl.Color.blank;
         const segments = 360;
         for (0..segments) |num| {
             const frac = @as(f32, @floatFromInt(num)) / @as(f32, @floatFromInt(segments));
@@ -409,7 +377,7 @@ const gui = struct {
         thickness: f32,
     ) bool {
         const mouse_position = rl.getMousePosition();
-        const hovering_cross = rectanglePointCollision(mouse_position, rect);
+        const hovering_cross = rl.checkCollisionPointRec(mouse_position, rect);
         const color = if (hovering_cross) rl.Color.white else rl.Color.black;
         rl.drawRectangleRec(rect, rl.Color.red);
         rl.drawLineEx(.{
@@ -447,7 +415,7 @@ const gui = struct {
     }
 
     fn add(rect: rl.Rectangle) bool {
-        const hovering_rectangle = rectanglePointCollision(rl.getMousePosition(), rect);
+        const hovering_rectangle = rl.checkCollisionPointRec(rl.getMousePosition(), rect);
 
         rl.drawRectangleLinesEx(rect, 3, if (hovering_rectangle)
             rl.Color.light_gray
@@ -474,13 +442,13 @@ const gui = struct {
         idle,
     } {
         const mouse_position = rl.getMousePosition();
-        const hovering_rectangle = rectanglePointCollision(mouse_position, rect);
+        const hovering_rectangle = rl.checkCollisionPointRec(mouse_position, rect);
 
         const cross_rectangle = resizeRectangle(rect, rl.Vector2.one().scale(40), .{
             .x = 1, // top right conner
             .y = 0,
         });
-        const hovering_cross = rectanglePointCollision(mouse_position, cross_rectangle);
+        const hovering_cross = rl.checkCollisionPointRec(mouse_position, cross_rectangle);
 
         const border_color = if (hovering_rectangle and !hovering_cross)
             rl.Color.light_gray
@@ -513,11 +481,6 @@ const gui = struct {
         return .idle;
     }
 };
-
-fn rectanglePointCollision(point: rl.Vector2, rect: rl.Rectangle) bool {
-    return point.x >= rect.x and point.y > rect.y and
-        point.x < rect.x + rect.width and point.y < rect.y + rect.height;
-}
 
 fn drawNiceLine(start: rl.Vector2, end: rl.Vector2, thickness: f32, color: rl.Color) void {
     const projected_end = projectToClosestLine(start, end);

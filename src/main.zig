@@ -8,14 +8,13 @@ pub const config = struct {
     pub const key_bindings = struct {
         // zig fmt: off
         pub const draw            = .{ rl.MouseButton.mouse_button_left };
-        pub const draw_line       = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };
+        pub const undo            = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };
+        pub const redo            = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
+        pub const picking_color   = .{ rl.KeyboardKey.key_left_bracket };
         pub const eraser          = .{ rl.MouseButton.mouse_button_right };
         pub const confirm         = .{ rl.MouseButton.mouse_button_left };
-        pub const picking_color   = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
-        pub const clear           = .{ rl.KeyboardKey.key_right_bracket };
         pub const scroll_up       = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
         pub const scroll_down     = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };
-        pub const view_all_images = .{ rl.KeyboardKey.key_left_bracket };
         pub const new_canvas      = .{ rl.KeyboardKey.key_n };
         // zig fmt: on
 
@@ -33,6 +32,7 @@ pub const config = struct {
     /// Set to null to disable animations.
     pub const animation_speed: ?comptime_int = 10;
 
+    pub const exit_on_unfocus = true;
     pub const line_thickness = 4;
     pub const eraser_thickness = 40;
     pub const color_wheel_size = 100;
@@ -48,14 +48,8 @@ pub const std_options = std.Options{
 pub fn main() !void {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_impl.deinit();
-    var thread_pool: std.Thread.Pool = undefined;
-    try thread_pool.init(.{
-        .allocator = gpa_impl.allocator(),
-        .n_jobs = 1,
-    });
-    defer thread_pool.deinit();
 
-    var drawer = try Drawer.init(gpa_impl.allocator(), &thread_pool);
+    var drawer = try Drawer.init(gpa_impl.allocator());
     try drawer.run();
     drawer.deinit();
 }
