@@ -1,7 +1,6 @@
 const std = @import("std");
 const rl = @import("raylib");
 const Allocator = std.mem.Allocator;
-const AssetLoader = @import("AssetLoader.zig");
 const main = @import("main.zig");
 const config = main.config;
 const is_debug = @import("main.zig").is_debug;
