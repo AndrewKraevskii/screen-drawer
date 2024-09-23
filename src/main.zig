@@ -19,7 +19,7 @@ pub const config = struct {
         // zig fmt: on
 
         comptime {
-            for (@typeInfo(@This()).Struct.decls) |decl| {
+            for (std.meta.declarations(@This())) |decl| {
                 for (@field(key_bindings, decl.name), 0..) |key, index| {
                     if (@TypeOf(key) == rl.MouseButton or @TypeOf(key) == rl.KeyboardKey) continue;
                     @compileError("Key bindings should include rl.MouseButton or rl.KeyboardKey found: " ++
