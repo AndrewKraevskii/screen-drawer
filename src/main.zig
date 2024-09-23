@@ -7,15 +7,15 @@ pub const config = struct {
 
     pub const key_bindings = struct {
         // zig fmt: off
-        pub const draw            = .{ rl.MouseButton.mouse_button_left };
-        pub const undo            = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };
-        pub const redo            = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
-        pub const picking_color   = .{ rl.KeyboardKey.key_left_bracket };
-        pub const eraser          = .{ rl.MouseButton.mouse_button_right };
-        pub const confirm         = .{ rl.MouseButton.mouse_button_left };
-        pub const scroll_up       = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
-        pub const scroll_down     = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };
-        pub const new_canvas      = .{ rl.KeyboardKey.key_n };
+        pub const draw               = .{ rl.MouseButton.mouse_button_left };
+        pub const undo               = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };
+        pub const redo               = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
+        pub const picking_color      = .{ rl.KeyboardKey.key_left_bracket };
+        pub const eraser             = .{ rl.MouseButton.mouse_button_right };
+        pub const confirm            = .{ rl.MouseButton.mouse_button_left };
+        pub const scroll_up          = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
+        pub const scroll_down        = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };
+        pub const toggle_keybindings = .{ rl.KeyboardKey.key_h };
         // zig fmt: on
 
         comptime {
@@ -50,8 +50,8 @@ pub fn main() !void {
     defer _ = gpa_impl.deinit();
 
     var drawer = try Drawer.init(gpa_impl.allocator());
+    defer drawer.deinit();
     try drawer.run();
-    drawer.deinit();
 }
 
 test {

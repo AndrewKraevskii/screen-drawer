@@ -31,6 +31,8 @@ history: History = .{},
 
 old_mouse_position: rl.Vector2,
 
+showing_keybindings: bool = false,
+
 const History = struct {
     events: std.ArrayListUnmanaged(Entry) = .{},
     undone: usize = 0,
@@ -163,6 +165,115 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
     };
 }
 
+pub fn padRectangle(rect: rl.Rectangle, padding: rl.Vector2) rl.Rectangle {
+    return .{
+        .x = rect.x - padding.x,
+        .y = rect.y - padding.y,
+        .width = rect.width + 2 * padding.x,
+        .height = rect.height + 2 * padding.y,
+    };
+}
+
+pub fn drawKeybindingsHelp(arena: std.mem.Allocator, position: rl.Vector2) !void {
+    const starting_position = position;
+    const font_size = 20;
+    const spacing = 3;
+    const y_spacing = 1;
+    const dash_string = " - ";
+    const keys_join_string = " + ";
+
+    const help_window_height = (font_size + y_spacing) * @as(f32, @floatFromInt(std.meta.declarations(config.key_bindings).len));
+
+    const measurer: struct {
+        font: rl.Font,
+        spacing: f32,
+        font_size: f32,
+
+        pub fn measureText(self: @This(), text: [:0]const u8) rl.Vector2 {
+            return rl.measureTextEx(
+                self.font,
+                text,
+                self.font_size,
+                self.spacing,
+            );
+        }
+    } = .{ .font = rl.getFontDefault(), .spacing = spacing, .font_size = font_size };
+
+    const max_width_left, const max_width_right = max_width: {
+        var max_width_left: f32 = 0;
+        var max_width_right: f32 = 0;
+        inline for (comptime std.meta.declarations(config.key_bindings)) |key_binding| {
+            const keys = @field(config.key_bindings, key_binding.name);
+            {
+                var string_builder = std.ArrayList(u8).init(arena);
+                defer string_builder.deinit();
+                try string_builder.appendSlice(dash_string);
+                inline for (keys, 0..) |key, key_index| {
+                    try string_builder.appendSlice(@tagName(key));
+                    if (key_index + 1 != keys.len)
+                        try string_builder.appendSlice(keys_join_string);
+                }
+                try string_builder.append(0);
+                const width_right = measurer.measureText(@ptrCast(string_builder.items));
+                max_width_right = @max(width_right.x, max_width_right);
+            }
+
+            const width_left = measurer.measureText(key_binding.name).x;
+            max_width_left = @max(width_left, max_width_left);
+        }
+        break :max_width .{ max_width_left, max_width_right };
+    };
+
+    const drawing_rect = rl.Rectangle.init(starting_position.x, starting_position.y, max_width_left + max_width_right, help_window_height);
+
+    rl.drawRectangleRec(
+        padRectangle(drawing_rect, .{ .x = 10, .y = 10 }),
+        rl.Color.black.alpha(0.9),
+    );
+
+    inline for (comptime std.meta.declarations(config.key_bindings), 0..) |key_binding, index| {
+        const name = key_binding.name;
+
+        const y_offset: f32 = (font_size + y_spacing) * @as(f32, @floatFromInt(index));
+        const pos = starting_position.add(.{
+            .x = 0,
+            .y = y_offset,
+        });
+
+        {
+            rl.drawTextEx(
+                rl.getFontDefault(),
+                name,
+                pos,
+                font_size,
+                spacing,
+                rl.Color.green,
+            );
+        }
+        {
+            var string_builder = std.ArrayList(u8).init(arena);
+            defer string_builder.deinit();
+            try string_builder.appendSlice(dash_string);
+
+            const keys = @field(config.key_bindings, name);
+            inline for (keys, 0..) |key, key_index| {
+                try string_builder.appendSlice(@tagName(key));
+                if (key_index + 1 != keys.len)
+                    try string_builder.appendSlice(keys_join_string);
+            }
+            try string_builder.append(0);
+            rl.drawTextEx(
+                rl.getFontDefault(),
+                @ptrCast(string_builder.items.ptr),
+                pos.add(.{ .x = max_width_left, .y = 0 }),
+                font_size,
+                spacing,
+                rl.Color.red,
+            );
+        }
+    }
+}
+
 pub fn deinit(self: *Drawer) void {
     self.strokes.deinit(self.gpa);
     self.history.deinit(self.gpa);
@@ -177,11 +288,18 @@ pub fn run(self: *Drawer) !void {
 }
 
 pub fn tick(self: *Drawer) !void {
+    var arena = std.heap.ArenaAllocator.init(self.gpa);
+    defer arena.deinit();
+
     rl.beginDrawing();
     rl.clearBackground(rl.Color.blank);
 
     const mouse_position = rl.getMousePosition();
     defer self.old_mouse_position = mouse_position;
+
+    if (isPressed(config.key_bindings.toggle_keybindings)) {
+        self.showing_keybindings = !self.showing_keybindings;
+    }
 
     self.state = switch (self.state) {
         .editing => |*state| blk: {
@@ -292,6 +410,9 @@ pub fn tick(self: *Drawer) !void {
         },
     };
 
+    if (self.showing_keybindings) {
+        try drawKeybindingsHelp(arena.allocator(), .init(100, 100));
+    }
     if (@import("builtin").mode == .Debug)
         rl.drawFPS(0, 0);
 
