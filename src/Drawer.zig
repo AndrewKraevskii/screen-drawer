@@ -4,6 +4,7 @@ const Allocator = std.mem.Allocator;
 const main = @import("main.zig");
 const config = main.config;
 const is_debug = @import("main.zig").is_debug;
+const HistoryStorage = @import("history.zig").History;
 
 gpa: std.mem.Allocator,
 
@@ -35,95 +36,47 @@ old_mouse_position: rl.Vector2,
 
 showing_keybindings: bool = false,
 
-const History = struct {
-    events: std.ArrayListUnmanaged(Entry) = .{},
-    undone: usize = 0,
+const History = HistoryStorage(EventTypes);
 
-    const Entry = union(enum) {
-        drawn: usize,
-        erased: usize,
-    };
-
-    fn undo(history: *History, strokes: *std.ArrayListUnmanaged(Stroke)) bool {
-        std.debug.assert(history.undone <= history.events.items.len);
-        if (history.undone == history.events.items.len) {
-            return false;
-        }
-        history.undone += 1;
-        const event_to_undo = history.events.items[history.events.items.len - history.undone];
-
-        switch (event_to_undo) {
-            .drawn => |index| {
-                strokes.items[index].is_active = false;
-            },
-            .erased => |index| {
-                strokes.items[index].is_active = true;
-            },
-        }
-        return true;
+fn debugDrawHistory(history: History, pos: rl.Vector2) void {
+    const font_size = 20;
+    const y_spacing = 10;
+    for (history.events.items, 0..) |entry, index| {
+        const alpha: f32 = if (index >= history.events.items.len - history.undone) 0.4 else 1;
+        var buffer: [100]u8 = undefined;
+        const y_offset: f32 = (font_size + y_spacing) * @as(f32, @floatFromInt(index));
+        const text, const color = switch (entry) {
+            .drawn => |i| .{ std.fmt.bufPrintZ(&buffer, "drawn {d}", .{i}) catch unreachable, rl.Color.green.alpha(alpha) },
+            .erased => |i| .{ std.fmt.bufPrintZ(&buffer, "erased {d}", .{i}) catch unreachable, rl.Color.red.alpha(alpha) },
+        };
+        rl.drawTextEx(rl.getFontDefault(), text, pos.add(.{
+            .x = 0,
+            .y = y_offset,
+        }), font_size, 2, color);
     }
+}
 
-    fn redo(history: *History, strokes: *std.ArrayListUnmanaged(Stroke)) bool {
-        if (history.undone == 0) return false;
-        const event_to_redo = history.events.items[history.events.items.len - history.undone];
-        history.undone -= 1;
-        switch (event_to_redo) {
-            .drawn => |index| {
-                strokes.items[index].is_active = true;
-            },
-            .erased => |index| {
-                strokes.items[index].is_active = false;
-            },
-        }
-        return true;
-    }
+const Drawer = @This();
 
-    fn debugDraw(history: History, pos: rl.Vector2) void {
-        const font_size = 20;
-        const y_spacing = 10;
-        for (history.events.items, 0..) |entry, index| {
-            const alpha: f32 = if (index >= history.events.items.len - history.undone) 0.4 else 1;
-            var buffer: [100]u8 = undefined;
-            const y_offset: f32 = (font_size + y_spacing) * @as(f32, @floatFromInt(index));
-            switch (entry) {
-                .drawn => |i| {
-                    rl.drawTextEx(rl.getFontDefault(), std.fmt.bufPrintZ(&buffer, "drawn {d}", .{i}) catch unreachable, pos.add(.{
-                        .x = 0,
-                        .y = y_offset,
-                    }), font_size, 2, rl.Color.green.alpha(alpha));
-                },
-                .erased => |i| {
-                    rl.drawTextEx(rl.getFontDefault(), std.fmt.bufPrintZ(&buffer, "erased {d}", .{i}) catch unreachable, pos.add(.{
-                        .x = 0,
-                        .y = y_offset,
-                    }), font_size, 2, rl.Color.red.alpha(alpha));
-                },
-            }
+const EventTypes = union(enum) {
+    drawn: usize,
+    erased: usize,
+
+    pub fn redo(event: EventTypes, state: *Drawer) void {
+        switch (event) {
+            .drawn => |index| state.strokes.items[index].is_active = true,
+            .erased => |index| state.strokes.items[index].is_active = false,
         }
     }
-
-    fn addHistoryEntry(
-        history: *History,
-        gpa: Allocator,
-        entry: Entry,
-    ) !void {
-        if (history.undone != 0) {
-            history.events.shrinkRetainingCapacity(history.events.items.len - history.undone);
-            history.undone = 0;
+    pub fn undo(event: EventTypes, state: *Drawer) void {
+        switch (event) {
+            .erased => |index| state.strokes.items[index].is_active = true,
+            .drawn => |index| state.strokes.items[index].is_active = false,
         }
-
-        try history.events.append(
-            gpa,
-            entry,
-        );
-    }
-
-    fn deinit(history: *History, gpa: Allocator) void {
-        history.events.deinit(gpa);
     }
 };
 
-const Stroke = struct {
+pub const Stroke = struct {
     is_active: bool = true,
     span: Span,
     color: rl.Color,
@@ -133,8 +86,6 @@ const Span = struct {
     start: usize,
     size: usize,
 };
-
-const Drawer = @This();
 
 pub fn init(gpa: std.mem.Allocator) !Drawer {
     rl.setConfigFlags(.{
@@ -318,11 +269,16 @@ pub fn tick(self: *Drawer) !void {
                     }
                 }
             }
-            if (isPressed(config.key_bindings.undo))
-                _ = self.history.undo(&self.strokes);
-            if (isPressed(config.key_bindings.redo))
-                _ = self.history.redo(&self.strokes);
-
+            if (isPressed(config.key_bindings.undo)) {
+                if (self.history.undo()) |undo_event| {
+                    undo_event.undo(self);
+                }
+            }
+            if (isPressed(config.key_bindings.redo)) {
+                if (self.history.redo()) |redo_event| {
+                    redo_event.redo(self);
+                }
+            }
             state.brush_state = switch (state.brush_state) {
                 .idle => if (isDown(config.key_bindings.draw)) state: {
                     try self.history.addHistoryEntry(self.gpa, .{ .drawn = self.strokes.items.len });
@@ -349,7 +305,7 @@ pub fn tick(self: *Drawer) !void {
                             .color = self.brush.color,
                         });
                     }
-                    const min_distanse = config.line_thickness;
+                    const min_distanse = 10;
                     stroke_add_block: {
                         // if previous segment is to small update it instead of adding new.
                         if (self.strokes.items[self.strokes.items.len - 1].span.size >= 1) {
@@ -405,7 +361,7 @@ pub fn tick(self: *Drawer) !void {
                 },
             };
 
-            self.history.debugDraw(.{
+            debugDrawHistory(self.history, .{
                 .x = 20,
                 .y = 10,
             });
