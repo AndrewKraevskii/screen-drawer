@@ -26,6 +26,8 @@ brush: struct {
 },
 
 strokes: std.ArrayListUnmanaged(Stroke) = .{},
+// TODO: use less space for segment.
+// One point per segment and u16 to store position instead of float.
 segments: std.ArrayListUnmanaged([2]rl.Vector2) = .{},
 history: History = .{},
 
@@ -294,6 +296,10 @@ pub fn tick(self: *Drawer) !void {
     rl.beginDrawing();
     rl.clearBackground(rl.Color.blank);
 
+    std.log.debug("history size {d}", .{self.history.events.items.len});
+    std.log.debug("strokes size {d}", .{self.strokes.items.len});
+    std.log.debug("segments size {d}", .{self.segments.items.len});
+
     const mouse_position = rl.getMousePosition();
     defer self.old_mouse_position = mouse_position;
 
@@ -343,15 +349,25 @@ pub fn tick(self: *Drawer) !void {
                             .color = self.brush.color,
                         });
                     }
+                    const min_distanse = config.line_thickness;
+                    stroke_add_block: {
+                        // if previous segment is to small update it instead of adding new.
+                        if (self.strokes.items[self.strokes.items.len - 1].span.size >= 1) {
+                            const prev = &self.segments.items[self.segments.items.len - 1];
+                            if (prev[0].distanceSqr(prev[1]) < min_distanse * min_distanse) {
+                                prev[1] = rl.getMousePosition();
+                                break :stroke_add_block;
+                            }
+                        }
 
-                    self.strokes.items[self.strokes.items.len - 1].span.size += 1;
-                    self.strokes.items[self.strokes.items.len - 1].color = self.brush.color;
+                        self.strokes.items[self.strokes.items.len - 1].span.size += 1;
+                        self.strokes.items[self.strokes.items.len - 1].color = self.brush.color;
 
-                    try self.segments.append(self.gpa, .{
-                        self.old_mouse_position,
-                        rl.getMousePosition(),
-                    });
-
+                        try self.segments.append(self.gpa, .{
+                            self.old_mouse_position,
+                            rl.getMousePosition(),
+                        });
+                    }
                     break :state if (isDown(config.key_bindings.draw))
                         .drawing
                     else
