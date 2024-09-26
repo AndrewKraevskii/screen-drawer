@@ -74,10 +74,7 @@ pub fn drawTrail(self: *@This()) void {
     var prev: ?MouseTrailParticle = null;
     inline for (self.mouse_trail.orderedSlices()) |slice| {
         for (slice) |*particle| {
-            if (particle.ttl < 0) {
-                std.log.debug("skipped", .{});
-                continue;
-            }
+            if (particle.ttl < 0) continue;
             if (prev == null) {
                 prev = particle.*;
                 continue;
@@ -119,12 +116,14 @@ const EventTypes = union(enum) {
     erased: usize,
 
     pub fn redo(event: EventTypes, state: *Drawer) void {
+        tracy.message("redo");
         switch (event) {
             .drawn => |index| state.strokes.items[index].is_active = true,
             .erased => |index| state.strokes.items[index].is_active = false,
         }
     }
     pub fn undo(event: EventTypes, state: *Drawer) void {
+        tracy.message("undo");
         switch (event) {
             .erased => |index| state.strokes.items[index].is_active = true,
             .drawn => |index| state.strokes.items[index].is_active = false,
@@ -132,7 +131,7 @@ const EventTypes = union(enum) {
     }
 };
 
-pub const Stroke = struct {
+const Stroke = struct {
     is_active: bool = true,
     span: Span,
     color: rl.Color,
@@ -158,9 +157,6 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
     rl.initWindow(0, 0, "Drawer");
     errdefer rl.closeWindow();
 
-    const save_directory = try getAppDataDirEnsurePathExist(gpa, config.app_name);
-    defer gpa.free(save_directory);
-
     return .{
         .gpa = gpa,
         .color_wheel = .{ .center = rl.Vector2.zero(), .size = 0 },
@@ -177,16 +173,7 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
     };
 }
 
-pub fn padRectangle(rect: rl.Rectangle, padding: rl.Vector2) rl.Rectangle {
-    return .{
-        .x = rect.x - padding.x,
-        .y = rect.y - padding.y,
-        .width = rect.width + 2 * padding.x,
-        .height = rect.height + 2 * padding.y,
-    };
-}
-
-pub fn drawKeybindingsHelp(arena: std.mem.Allocator, position: rl.Vector2) !void {
+fn drawKeybindingsHelp(arena: std.mem.Allocator, position: rl.Vector2) !void {
     const zone = tracy.initZone(@src(), .{ .name = "drawKeybindingsHelp" });
     defer zone.deinit();
 
@@ -204,7 +191,7 @@ pub fn drawKeybindingsHelp(arena: std.mem.Allocator, position: rl.Vector2) !void
         spacing: f32,
         font_size: f32,
 
-        pub fn measureText(self: @This(), text: [:0]const u8) rl.Vector2 {
+        fn measureText(self: @This(), text: [:0]const u8) rl.Vector2 {
             const measurer_zone = tracy.initZone(@src(), .{ .name = "measure text" });
             defer measurer_zone.deinit();
 
@@ -329,8 +316,6 @@ pub fn tick(self: *Drawer) !void {
 
     self.state = switch (self.state) {
         .editing => |*state| blk: {
-            rl.hideCursor();
-
             {
                 const zone = tracy.initZone(@src(), .{ .name = "Line drawing" });
                 defer zone.deinit();
@@ -449,9 +434,9 @@ pub fn tick(self: *Drawer) !void {
             if (state.brush_state == .eraser) {
                 rl.drawCircleLinesV(mouse_position, config.eraser_thickness / 2, self.brush.color);
             } else {
-                self.addTrailParticle(mouse_position);
                 self.updateTrail();
                 if (self.mouse_trail_enabled) {
+                    self.addTrailParticle(mouse_position);
                     self.drawTrail();
                 }
                 rl.drawCircleV(mouse_position, self.brush.radius * 2, self.brush.color);
@@ -542,134 +527,6 @@ const ColorWheel = struct {
     }
 };
 
-const gui = struct {
-    fn cross(
-        rect: rl.Rectangle,
-        thickness: f32,
-    ) bool {
-        const mouse_position = rl.getMousePosition();
-        const hovering_cross = rl.checkCollisionPointRec(mouse_position, rect);
-        const color = if (hovering_cross) rl.Color.white else rl.Color.black;
-        rl.drawRectangleRec(rect, rl.Color.red);
-        rl.drawLineEx(.{
-            .x = rect.x,
-            .y = rect.y,
-        }, .{
-            .x = rect.x + rect.width,
-            .y = rect.y + rect.height,
-        }, thickness, color);
-        rl.drawLineEx(.{
-            .x = rect.x + rect.width,
-            .y = rect.y,
-        }, .{
-            .x = rect.x,
-            .y = rect.y + rect.height,
-        }, thickness, color);
-        return hovering_cross and isPressed(config.key_bindings.confirm);
-    }
-
-    fn drawPlus(rect: rl.Rectangle, thickness: f32, color: rl.Color) void {
-        rl.drawLineEx(.{
-            .x = rect.x,
-            .y = rect.y + rect.height / 2,
-        }, .{
-            .x = rect.x + rect.width,
-            .y = rect.y + rect.height / 2,
-        }, thickness, color);
-        rl.drawLineEx(.{
-            .x = rect.x + rect.width / 2,
-            .y = rect.y,
-        }, .{
-            .x = rect.x + rect.width / 2,
-            .y = rect.y + rect.height,
-        }, thickness, color);
-    }
-
-    fn add(rect: rl.Rectangle) bool {
-        const hovering_rectangle = rl.checkCollisionPointRec(rl.getMousePosition(), rect);
-
-        rl.drawRectangleLinesEx(rect, 3, if (hovering_rectangle)
-            rl.Color.light_gray
-        else
-            rl.Color.gray);
-
-        {
-            rl.drawRectangleRec(
-                resizeRectangleCenter(rect, rl.Vector2.one().scale(60)),
-                rl.Color.dark_gray,
-            );
-            drawPlus(
-                resizeRectangleCenter(rect, rl.Vector2.one().scale(20)),
-                3,
-                rl.Color.white,
-            );
-        }
-        return hovering_rectangle and isPressed(config.key_bindings.confirm);
-    }
-
-    fn item(rect: rl.Rectangle, texture: ?rl.Texture) enum {
-        select,
-        delete,
-        idle,
-    } {
-        const mouse_position = rl.getMousePosition();
-        const hovering_rectangle = rl.checkCollisionPointRec(mouse_position, rect);
-
-        const cross_rectangle = resizeRectangle(rect, rl.Vector2.one().scale(40), .{
-            .x = 1, // top right conner
-            .y = 0,
-        });
-        const hovering_cross = rl.checkCollisionPointRec(mouse_position, cross_rectangle);
-
-        const border_color = if (hovering_rectangle and !hovering_cross)
-            rl.Color.light_gray
-        else
-            rl.Color.gray;
-        rl.drawRectangleRec(rect, rl.Color.black.alpha(0.6));
-        rl.drawRectangleLinesEx(rect, 3, border_color);
-
-        if (texture) |t| t.drawPro(
-            .{
-                .x = 0,
-                .y = 0,
-                .width = @floatFromInt(t.width),
-                .height = @floatFromInt(t.height),
-            },
-            rect,
-            rl.Vector2.zero(),
-            0,
-            rl.Color.white,
-        );
-
-        if (cross(cross_rectangle, 3)) {
-            return .delete;
-        }
-        if (isPressed(config.key_bindings.confirm)) {
-            if (hovering_rectangle) {
-                return .select;
-            }
-        }
-        return .idle;
-    }
-};
-
-fn drawNiceLine(start: rl.Vector2, end: rl.Vector2, thickness: f32, color: rl.Color) void {
-    const projected_end = projectToClosestLine(start, end);
-    rl.drawLineEx(start, projected_end, thickness, color);
-}
-
-fn projectToClosestLine(start: rl.Vector2, end: rl.Vector2) rl.Vector2 {
-    const horizontal = rl.Vector2{
-        .x = end.x,
-        .y = start.y,
-    };
-    const vertical = rl.Vector2{
-        .x = start.x,
-        .y = end.y,
-    };
-    return if (start.subtract(horizontal).lengthSqr() > start.subtract(vertical).lengthSqr()) horizontal else vertical;
-}
-
 fn expDecay(a: anytype, b: @TypeOf(a), lambda: @TypeOf(a), dt: @TypeOf(a)) @TypeOf(a) {
     return std.math.lerp(a, b, 1 - @exp(-lambda * dt));
 }
@@ -696,6 +553,15 @@ fn resizeRectangleCenter(rect: rl.Rectangle, size: rl.Vector2) rl.Rectangle {
     });
 }
 
+fn padRectangle(rect: rl.Rectangle, padding: rl.Vector2) rl.Rectangle {
+    return .{
+        .x = rect.x - padding.x,
+        .y = rect.y - padding.y,
+        .width = rect.width + 2 * padding.x,
+        .height = rect.height + 2 * padding.y,
+    };
+}
+
 fn resizeRectangle(rect: rl.Rectangle, size: rl.Vector2, origin: rl.Vector2) rl.Rectangle {
     return .{
         .x = rect.x + (rect.width - size.x) * origin.x,
@@ -715,14 +581,4 @@ fn rectangleSize(rect: rl.Rectangle) rl.Vector2 {
 fn flushRaylib() void {
     rl.beginMode2D(std.mem.zeroes(rl.Camera2D));
     rl.endMode2D();
-}
-
-fn getAppDataDirEnsurePathExist(alloc: std.mem.Allocator, appname: []const u8) ![]u8 {
-    const data_dir_path = try std.fs.getAppDataDir(alloc, appname);
-
-    std.fs.makeDirAbsolute(data_dir_path) catch |e| switch (e) {
-        error.PathAlreadyExists => {},
-        else => |err| return err,
-    };
-    return data_dir_path;
 }
