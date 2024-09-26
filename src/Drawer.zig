@@ -5,6 +5,7 @@ const main = @import("main.zig");
 const config = main.config;
 const is_debug = @import("main.zig").is_debug;
 const HistoryStorage = @import("history.zig").History;
+const tracy = @import("tracy");
 
 gpa: std.mem.Allocator,
 
@@ -88,6 +89,9 @@ const Span = struct {
 };
 
 pub fn init(gpa: std.mem.Allocator) !Drawer {
+    const zone = tracy.initZone(@src(), .{ .name = "Drawer.init" });
+    defer zone.deinit();
+
     rl.setConfigFlags(.{
         .window_topmost = true,
         .window_transparent = true,
@@ -128,6 +132,9 @@ pub fn padRectangle(rect: rl.Rectangle, padding: rl.Vector2) rl.Rectangle {
 }
 
 pub fn drawKeybindingsHelp(arena: std.mem.Allocator, position: rl.Vector2) !void {
+    const zone = tracy.initZone(@src(), .{ .name = "drawKeybindingsHelp" });
+    defer zone.deinit();
+
     const starting_position = position;
     const font_size = 20;
     const spacing = 3;
@@ -143,6 +150,9 @@ pub fn drawKeybindingsHelp(arena: std.mem.Allocator, position: rl.Vector2) !void
         font_size: f32,
 
         pub fn measureText(self: @This(), text: [:0]const u8) rl.Vector2 {
+            const measurer_zone = tracy.initZone(@src(), .{ .name = "measure text" });
+            defer measurer_zone.deinit();
+
             return rl.measureTextEx(
                 self.font,
                 text,
@@ -236,6 +246,7 @@ pub fn deinit(self: *Drawer) void {
 
 pub fn run(self: *Drawer) !void {
     while (!rl.windowShouldClose() and (!config.exit_on_unfocus or rl.isWindowFocused())) {
+        tracy.frameMark();
         try tick(self);
     }
 }
@@ -247,9 +258,9 @@ pub fn tick(self: *Drawer) !void {
     rl.beginDrawing();
     rl.clearBackground(rl.Color.blank);
 
-    std.log.debug("history size {d}", .{self.history.events.items.len});
-    std.log.debug("strokes size {d}", .{self.strokes.items.len});
-    std.log.debug("segments size {d}", .{self.segments.items.len});
+    tracy.plot(i64, "history size", @intCast(self.history.events.items.len));
+    tracy.plot(i64, "strokes size", @intCast(self.strokes.items.len));
+    tracy.plot(i64, "segments size", @intCast(self.segments.items.len));
 
     const mouse_position = rl.getMousePosition();
     defer self.old_mouse_position = mouse_position;
@@ -262,10 +273,15 @@ pub fn tick(self: *Drawer) !void {
         .editing => |*state| blk: {
             rl.hideCursor();
 
-            for (self.strokes.items) |stroke| {
-                if (stroke.is_active) {
-                    for (self.segments.items[stroke.span.start..][0..stroke.span.size]) |line| {
-                        rl.drawLineEx(line[0], line[1], self.brush.radius, stroke.color);
+            {
+                const zone = tracy.initZone(@src(), .{ .name = "Line drawing" });
+                defer zone.deinit();
+
+                for (self.strokes.items) |stroke| {
+                    if (stroke.is_active) {
+                        for (self.segments.items[stroke.span.start..][0..stroke.span.size]) |line| {
+                            rl.drawLineEx(line[0], line[1], self.brush.radius, stroke.color);
+                        }
                     }
                 }
             }
