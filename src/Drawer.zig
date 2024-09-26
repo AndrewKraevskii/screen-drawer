@@ -6,6 +6,9 @@ const config = main.config;
 const is_debug = @import("main.zig").is_debug;
 const HistoryStorage = @import("history.zig").History;
 const tracy = @import("tracy");
+const OverrideQueue = @import("override_queue.zig").OverrideQueue;
+
+// const tracy_options = @import("tracy-options");
 
 gpa: std.mem.Allocator,
 
@@ -36,8 +39,33 @@ history: History = .{},
 old_mouse_position: rl.Vector2,
 
 showing_keybindings: bool = false,
+particles: OverrideQueue(Particle, 0x4) = .empty,
 
 const History = HistoryStorage(EventTypes);
+
+pub fn addParticle(self: *@This(), pos: rl.Vector2) void {
+    std.log.debug("head {d}", .{self.particles.head});
+    std.log.debug("count {d}", .{self.particles.count});
+    self.particles.add(.{ .pos = pos, .size = self.brush.radius });
+}
+
+pub fn drawParticles(self: *@This()) void {
+    if (self.particles.count == 0) return;
+    var prev = self.particles.orderedSlices()[0][0];
+    rl.drawCircleV(prev.pos, prev.size, self.brush.color);
+    inline for (self.particles.orderedSlices()) |slice| {
+        for (slice) |*particle| {
+            defer prev = particle.*;
+            rl.drawLineEx(particle.pos, prev.pos, particle.size * 2, self.brush.color);
+            particle.size *= 0.9;
+        }
+    }
+}
+
+const Particle = struct {
+    pos: rl.Vector2,
+    size: f32,
+};
 
 fn debugDrawHistory(history: History, pos: rl.Vector2) void {
     const font_size = 20;
@@ -391,6 +419,8 @@ pub fn tick(self: *Drawer) !void {
             if (state.brush_state == .eraser) {
                 rl.drawCircleLinesV(mouse_position, config.eraser_thickness / 2, self.brush.color);
             } else {
+                self.addParticle(mouse_position);
+                self.drawParticles();
                 rl.drawCircleV(mouse_position, self.brush.radius * 2, self.brush.color);
             }
 
