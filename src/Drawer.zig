@@ -39,32 +39,52 @@ history: History = .{},
 old_mouse_position: rl.Vector2,
 
 showing_keybindings: bool = false,
-particles: OverrideQueue(Particle, 0x4) = .empty,
+mouse_trail: OverrideQueue(MouseTrailParticle, 0x100) = .empty,
+mouse_trail_enabled: bool = false,
 
 const History = HistoryStorage(EventTypes);
 
-pub fn addParticle(self: *@This(), pos: rl.Vector2) void {
-    std.log.debug("head {d}", .{self.particles.head});
-    std.log.debug("count {d}", .{self.particles.count});
-    self.particles.add(.{ .pos = pos, .size = self.brush.radius });
+pub fn addTrailParticle(self: *@This(), pos: rl.Vector2) void {
+    std.log.debug("head {d}", .{self.mouse_trail.head});
+    std.log.debug("count {d}", .{self.mouse_trail.count});
+    self.mouse_trail.add(.{
+        .pos = pos,
+        .size = self.brush.radius,
+        .ttl = 0.2,
+    });
 }
 
-pub fn drawParticles(self: *@This()) void {
-    if (self.particles.count == 0) return;
-    var prev = self.particles.orderedSlices()[0][0];
-    rl.drawCircleV(prev.pos, prev.size, self.brush.color);
-    inline for (self.particles.orderedSlices()) |slice| {
+pub fn updateTrail(self: *@This()) void {
+    inline for (self.mouse_trail.orderedSlices()) |slice| {
         for (slice) |*particle| {
-            defer prev = particle.*;
-            rl.drawLineEx(particle.pos, prev.pos, particle.size * 2, self.brush.color);
             particle.size *= 0.9;
+            particle.ttl -= rl.getFrameTime();
+        }
+    }
+}
+pub fn drawTrail(self: *@This()) void {
+    if (self.mouse_trail.count == 0) return;
+    var prev: ?MouseTrailParticle = null;
+    inline for (self.mouse_trail.orderedSlices()) |slice| {
+        for (slice) |*particle| {
+            if (particle.ttl < 0) {
+                std.log.debug("skipped", .{});
+                continue;
+            }
+            if (prev == null) {
+                prev = particle.*;
+                continue;
+            }
+            defer prev = particle.*;
+            rl.drawLineEx(particle.pos, prev.?.pos, particle.size * 2, self.brush.color);
         }
     }
 }
 
-const Particle = struct {
+const MouseTrailParticle = struct {
     pos: rl.Vector2,
     size: f32,
+    ttl: f32,
 };
 
 fn debugDrawHistory(history: History, pos: rl.Vector2) void {
@@ -296,6 +316,9 @@ pub fn tick(self: *Drawer) !void {
     if (isPressed(config.key_bindings.toggle_keybindings)) {
         self.showing_keybindings = !self.showing_keybindings;
     }
+    if (isPressed(config.key_bindings.enable_mouse_trail)) {
+        self.mouse_trail_enabled = !self.mouse_trail_enabled;
+    }
 
     self.state = switch (self.state) {
         .editing => |*state| blk: {
@@ -419,8 +442,11 @@ pub fn tick(self: *Drawer) !void {
             if (state.brush_state == .eraser) {
                 rl.drawCircleLinesV(mouse_position, config.eraser_thickness / 2, self.brush.color);
             } else {
-                self.addParticle(mouse_position);
-                self.drawParticles();
+                self.addTrailParticle(mouse_position);
+                self.updateTrail();
+                if (self.mouse_trail_enabled) {
+                    self.drawTrail();
+                }
                 rl.drawCircleV(mouse_position, self.brush.radius * 2, self.brush.color);
             }
 
