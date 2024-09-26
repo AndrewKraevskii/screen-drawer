@@ -8,8 +8,6 @@ const HistoryStorage = @import("history.zig").History;
 const tracy = @import("tracy");
 const OverrideQueue = @import("override_queue.zig").OverrideQueue;
 
-// const tracy_options = @import("tracy-options");
-
 gpa: std.mem.Allocator,
 
 state: union(enum) {
@@ -45,6 +43,9 @@ mouse_trail_enabled: bool = false,
 const History = HistoryStorage(EventTypes);
 
 pub fn addTrailParticle(self: *@This(), pos: rl.Vector2) void {
+    const zone = tracy.initZone(@src(), .{});
+    defer zone.deinit();
+
     std.log.debug("head {d}", .{self.mouse_trail.head});
     std.log.debug("count {d}", .{self.mouse_trail.count});
     self.mouse_trail.add(.{
@@ -55,6 +56,9 @@ pub fn addTrailParticle(self: *@This(), pos: rl.Vector2) void {
 }
 
 pub fn updateTrail(self: *@This()) void {
+    const zone = tracy.initZone(@src(), .{});
+    defer zone.deinit();
+
     inline for (self.mouse_trail.orderedSlices()) |slice| {
         for (slice) |*particle| {
             particle.size *= 0.9;
@@ -63,6 +67,9 @@ pub fn updateTrail(self: *@This()) void {
     }
 }
 pub fn drawTrail(self: *@This()) void {
+    const zone = tracy.initZone(@src(), .{});
+    defer zone.deinit();
+
     if (self.mouse_trail.count == 0) return;
     var prev: ?MouseTrailParticle = null;
     inline for (self.mouse_trail.orderedSlices()) |slice| {
@@ -137,7 +144,7 @@ const Span = struct {
 };
 
 pub fn init(gpa: std.mem.Allocator) !Drawer {
-    const zone = tracy.initZone(@src(), .{ .name = "Drawer.init" });
+    const zone = tracy.initZone(@src(), .{});
     defer zone.deinit();
 
     rl.setConfigFlags(.{
