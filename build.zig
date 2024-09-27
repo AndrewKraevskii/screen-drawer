@@ -5,8 +5,10 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const no_bin = b.option(bool, "no-bin", "Don't emit binary file") orelse false;
-
     const tracy_enable = b.option(bool, "tracy_enable", "Enable profiling") orelse false;
+
+    const options = b.addOptions();
+    options.addOption(bool, "tracy_enable", tracy_enable);
 
     const tracy = b.dependency("zig-tracy", .{
         .target = target,
@@ -31,6 +33,7 @@ pub fn build(b: *std.Build) void {
         // .use_lld = false,
     });
 
+    exe.root_module.addOptions("options", options);
     exe.linkLibrary(raylib_artifact);
     exe.root_module.addImport("raylib", raylib);
     exe.root_module.addImport("raygui", raygui);

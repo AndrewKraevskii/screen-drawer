@@ -6,6 +6,7 @@ const config = main.config;
 const is_debug = @import("main.zig").is_debug;
 const HistoryStorage = @import("history.zig").History;
 const tracy = @import("tracy");
+const _ = @import("tracy-options");
 const OverrideQueue = @import("override_queue.zig").OverrideQueue;
 
 gpa: std.mem.Allocator,
@@ -147,7 +148,7 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
     defer zone.deinit();
 
     rl.setConfigFlags(.{
-        .window_topmost = true,
+        .window_topmost = config.is_topmost,
         .window_transparent = true,
         .window_undecorated = true,
         .window_maximized = true,

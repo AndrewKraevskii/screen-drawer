@@ -34,7 +34,8 @@ pub const config = struct {
     /// Set to null to disable animations.
     pub const animation_speed: ?comptime_int = 10;
 
-    pub const exit_on_unfocus = true;
+    pub const exit_on_unfocus = !@import("options").tracy_enable;
+    pub const is_topmost = !@import("options").tracy_enable;
     pub const line_thickness = 4;
     pub const eraser_thickness = 40;
     pub const color_wheel_size = 100;
