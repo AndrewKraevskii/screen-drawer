@@ -39,6 +39,8 @@ old_mouse_position: rl.Vector2,
 showing_keybindings: bool = false,
 mouse_trail: OverrideQueue(MouseTrailParticle, 0x100) = .empty,
 mouse_trail_enabled: bool = false,
+background_color: rl.Color = .blank,
+background_aplha_selector: ?Bar = null,
 
 const History = HistoryStorage(EventTypes);
 
@@ -293,12 +295,77 @@ pub fn run(self: *Drawer) !void {
     }
 }
 
+const Bar = struct {
+    center: rl.Vector2,
+    min: f32,
+    max: f32,
+    scale: f32,
+    text: [:0]const u8,
+    color: rl.Color,
+
+    const Config = struct {
+        min: f32 = 0,
+        max: f32 = 1,
+        scale: f32 = 200,
+        text: [:0]const u8 = "Some ui bar",
+        color: rl.Color = .gray,
+    };
+
+    pub fn new(pos: rl.Vector2, value: f32, bar_config: Config) @This() {
+        const top_y = pos.y - bar_config.scale / 2;
+        const persantage = (value - bar_config.min) / (bar_config.max - bar_config.min);
+        return .{
+            .center = .init(
+                pos.x - 50,
+                persantage * bar_config.scale + top_y,
+            ),
+            .min = bar_config.min,
+            .max = bar_config.max,
+            .scale = bar_config.scale,
+            .text = bar_config.text,
+            .color = bar_config.color,
+        };
+    }
+
+    pub fn draw(self: @This(), mouse_pos: rl.Vector2) f32 {
+        const bar_top = self.center.add(.init(0, self.scale / 2));
+        const bar_bottom = self.center.subtract(.init(0, self.scale / 2));
+        const bar_width = 10;
+        rl.drawLineEx(
+            bar_top,
+            bar_bottom,
+            bar_width,
+            rl.Color.gray,
+        );
+        const bar_size = 10;
+        const bar_middle_pos = rl.Vector2.init(self.center.x, std.math.clamp(mouse_pos.y, bar_bottom.y, bar_top.y));
+        const font_size = 30;
+        const text_width = rl.measureText(self.text, font_size);
+        rl.drawText(
+            self.text,
+            @as(i32, @intFromFloat(self.center.x)) - text_width - bar_width,
+            @as(i32, @intFromFloat(self.center.y)) - font_size / 2,
+            font_size,
+            .white,
+        );
+        rl.drawLineEx(
+            bar_middle_pos.add(.init(0, bar_size / 2)),
+            bar_middle_pos.subtract(.init(0, bar_size / 2)),
+            bar_width,
+            rl.Color.black,
+        );
+
+        const selected_value = (bar_top.y - bar_middle_pos.y) / self.scale;
+        return selected_value * (self.max - self.min) + self.min;
+    }
+};
+
 pub fn tick(self: *Drawer) !void {
     var arena = std.heap.ArenaAllocator.init(self.gpa);
     defer arena.deinit();
 
     rl.beginDrawing();
-    rl.clearBackground(rl.Color.blank);
+    rl.clearBackground(self.background_color);
 
     tracy.plot(i64, "history size", @intCast(self.history.events.items.len));
     tracy.plot(i64, "strokes size", @intCast(self.strokes.items.len));
@@ -306,7 +373,10 @@ pub fn tick(self: *Drawer) !void {
 
     const mouse_position = rl.getMousePosition();
     defer self.old_mouse_position = mouse_position;
-
+    // :global input
+    // {
+    //     self.background_color = self.background_color.alpha(self.background_color.normalize().w + rl.getMouseWheelMove() / 10);
+    // }
     if (isPressed(config.key_bindings.toggle_keybindings)) {
         self.showing_keybindings = !self.showing_keybindings;
     }
@@ -445,7 +515,25 @@ pub fn tick(self: *Drawer) !void {
             break :blk self.state;
         },
     };
+    if (isDown(config.key_bindings.change_brightness)) {
+        if (self.background_aplha_selector) |bar| {
+            self.background_color = self.background_color.alpha(bar.draw(mouse_position));
+        } else {
+            self.background_aplha_selector = Bar.new(mouse_position, self.background_color.normalize().w, .{ .text = "Backgroun alpha" });
+        }
+    } else {
+        if (self.background_aplha_selector) |_| {
+            self.background_aplha_selector = null;
+        }
+    }
 
+    // self.background_color = self.background_color.alpha((Bar{
+    //     .center = .init(@floatFromInt(@divFloor(rl.getScreenWidth(), 2)), @floatFromInt(@divFloor(rl.getScreenHeight(), 2))),
+    //     .min = 0,
+    //     .max = 1,
+    //     .scale = @as(f32, @floatFromInt(rl.getScreenHeight())) * 0.5,
+    //     .text = "Background alpha",
+    // }).draw(mouse_position));
     if (self.showing_keybindings) {
         try drawKeybindingsHelp(arena.allocator(), .init(100, 100));
     }
@@ -576,9 +664,4 @@ fn rectangleSize(rect: rl.Rectangle) rl.Vector2 {
         .x = rect.width,
         .y = rect.height,
     };
-}
-
-fn flushRaylib() void {
-    rl.beginMode2D(std.mem.zeroes(rl.Camera2D));
-    rl.endMode2D();
 }

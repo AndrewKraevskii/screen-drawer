@@ -18,6 +18,7 @@ pub const config = struct {
         pub const scroll_down        = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };
         pub const toggle_keybindings = .{ rl.KeyboardKey.key_h };
         pub const enable_mouse_trail = .{ rl.KeyboardKey.key_t };
+        pub const change_brightness  = .{ rl.KeyboardKey.key_b };
         // zig fmt: on
 
         comptime {
