@@ -40,7 +40,7 @@ showing_keybindings: bool = false,
 mouse_trail: OverrideQueue(MouseTrailParticle, 0x100) = .empty,
 mouse_trail_enabled: bool = false,
 background_color: rl.Color = .blank,
-background_aplha_selector: ?Bar = null,
+background_alpha_selector: ?Bar = null,
 
 const History = HistoryStorage(EventTypes);
 
@@ -434,12 +434,12 @@ pub fn tick(self: *Drawer) !void {
                             .color = self.brush.color,
                         });
                     }
-                    const min_distanse = 10;
+                    const min_distance = 10;
                     stroke_add_block: {
                         // if previous segment is to small update it instead of adding new.
                         if (self.strokes.items[self.strokes.items.len - 1].span.size >= 1) {
                             const prev = &self.segments.items[self.segments.items.len - 1];
-                            if (prev[0].distanceSqr(prev[1]) < min_distanse * min_distanse) {
+                            if (prev[0].distanceSqr(prev[1]) < min_distance * min_distance) {
                                 prev[1] = rl.getMousePosition();
                                 break :stroke_add_block;
                             }
@@ -516,14 +516,14 @@ pub fn tick(self: *Drawer) !void {
         },
     };
     if (isDown(config.key_bindings.change_brightness)) {
-        if (self.background_aplha_selector) |bar| {
+        if (self.background_alpha_selector) |bar| {
             self.background_color = self.background_color.alpha(bar.draw(mouse_position));
         } else {
-            self.background_aplha_selector = Bar.new(mouse_position, self.background_color.normalize().w, .{ .text = "Backgroun alpha" });
+            self.background_alpha_selector = Bar.new(mouse_position, self.background_color.normalize().w, .{ .text = "Background alpha" });
         }
     } else {
-        if (self.background_aplha_selector) |_| {
-            self.background_aplha_selector = null;
+        if (self.background_alpha_selector) |_| {
+            self.background_alpha_selector = null;
         }
     }
 
