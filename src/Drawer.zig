@@ -31,7 +31,7 @@ brush: struct {
 strokes: std.ArrayListUnmanaged(Stroke) = .{},
 // TODO: use less space for segment.
 // One point per segment and u16 to store position instead of float.
-segments: std.ArrayListUnmanaged([2]rl.Vector2) = .{},
+segments: std.ArrayListUnmanaged(rl.Vector2) = .{},
 history: History = .{},
 
 old_mouse_position: rl.Vector2,
@@ -392,7 +392,14 @@ pub fn tick(self: *Drawer) !void {
 
                 for (self.strokes.items) |stroke| {
                     if (stroke.is_active) {
-                        for (self.segments.items[stroke.span.start..][0..stroke.span.size]) |line| {
+                        if (stroke.span.size < 2) continue;
+                        var iter = std.mem.window(
+                            rl.Vector2,
+                            self.segments.items[stroke.span.start..][0..stroke.span.size],
+                            2,
+                            1,
+                        );
+                        while (iter.next()) |line| {
                             rl.drawLineEx(line[0], line[1], self.brush.radius, stroke.color);
                         }
                     }
@@ -435,23 +442,24 @@ pub fn tick(self: *Drawer) !void {
                         });
                     }
                     const min_distance = 10;
-                    stroke_add_block: {
-                        // if previous segment is to small update it instead of adding new.
-                        if (self.strokes.items[self.strokes.items.len - 1].span.size >= 1) {
-                            const prev = &self.segments.items[self.segments.items.len - 1];
-                            if (prev[0].distanceSqr(prev[1]) < min_distance * min_distance) {
-                                prev[1] = rl.getMousePosition();
-                                break :stroke_add_block;
-                            }
-                        }
+                    _ = min_distance; // autofix
+                    {
+                        // // if previous segment is to small update it instead of adding ncqw.
+                        // if (self.strokes.items[self.strokes.items.len - 1].span.size >= 1) {
+                        //     const prev = &self.segments.items[self.segments.items.len - 2 ..];
+                        //     if (prev[0].distanceSqr(prev[1]) < min_distance * min_distance) {
+                        //         prev[1] = rl.getMousePosition();
+                        //         break :stroke_add_block;
+                        //     }
+                        // }
 
                         self.strokes.items[self.strokes.items.len - 1].span.size += 1;
                         self.strokes.items[self.strokes.items.len - 1].color = self.brush.color;
 
-                        try self.segments.append(self.gpa, .{
-                            self.old_mouse_position,
+                        try self.segments.append(
+                            self.gpa,
                             rl.getMousePosition(),
-                        });
+                        );
                     }
                     break :state if (isDown(config.key_bindings.draw))
                         .drawing
@@ -463,7 +471,13 @@ pub fn tick(self: *Drawer) !void {
 
                     for (self.strokes.items, 0..) |*stroke, index| {
                         if (stroke.is_active) {
-                            for (self.segments.items[stroke.span.start..][0..stroke.span.size]) |line| {
+                            var iter = std.mem.window(
+                                rl.Vector2,
+                                self.segments.items[stroke.span.start..][0..stroke.span.size],
+                                2,
+                                1,
+                            );
+                            while (iter.next()) |line| {
                                 if (rl.checkCollisionCircleLine(rl.getMousePosition(), radius, line[0], line[1])) {
                                     try self.history.addHistoryEntry(self.gpa, .{ .erased = index });
                                     stroke.is_active = false;
