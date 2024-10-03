@@ -18,3 +18,6 @@ You can look at keybindings at start of src/main.zig and change them however you
 It stores images in default location for apps to store data on your OS.
 - linux => ~/.local/share/screen-drawer/
 - windows => %LOCALAPPDATA%\\screen-drawer\\
+
+## TODO
+- [ ] dashed line
