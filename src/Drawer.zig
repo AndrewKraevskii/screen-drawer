@@ -44,12 +44,68 @@ background_alpha_selector: ?Bar = null,
 
 const History = HistoryStorage(EventTypes);
 
+fn getAppDataDirEnsurePathExist(alloc: std.mem.Allocator, appname: []const u8) ![]u8 {
+    const data_dir_path = try std.fs.getAppDataDir(alloc, appname);
+
+    std.fs.makeDirAbsolute(data_dir_path) catch |e| switch (e) {
+        error.PathAlreadyExists => {},
+        else => |err| return err,
+    };
+    return data_dir_path;
+}
+
+const save_folder_name = "screen_drawer_vector";
+
+fn save(self: *@This()) !void {
+    const dir_path = try getAppDataDirEnsurePathExist(self.gpa, save_folder_name);
+    defer self.gpa.free(dir_path);
+    var dir = try std.fs.openDirAbsolute(dir_path, .{});
+    defer dir.close();
+    var file = try dir.createFile("save.sdv", .{});
+    defer file.close();
+    var bw = std.io.bufferedWriter(file.writer());
+    defer bw.flush() catch |e| {
+        std.log.err("Failed to save: {s}", .{@errorName(e)});
+    };
+    const writer = bw.writer();
+    try writer.writeAll("sdv"); // magic
+    try writer.writeInt(u64, self.segments.items.len, .little);
+    try writer.writeAll(std.mem.sliceAsBytes(self.segments.items));
+    try writer.writeInt(u64, self.strokes.items.len, .little);
+    try writer.writeAll(std.mem.sliceAsBytes(self.strokes.items));
+}
+
+fn load(self: *@This()) !void {
+    const dir_path = try getAppDataDirEnsurePathExist(self.gpa, save_folder_name);
+    defer self.gpa.free(dir_path);
+    var dir = try std.fs.openDirAbsolute(dir_path, .{});
+    defer dir.close();
+    var file = try dir.openFile("save.sdv", .{});
+    defer file.close();
+    var br = std.io.bufferedReader(file.reader());
+    const reader = br.reader();
+
+    var buf: [3]u8 = undefined;
+    try reader.readNoEof(&buf); // magic
+    if (!std.mem.eql(u8, &buf, "sdv")) return error.MagicNotFound;
+
+    {
+        const segment_size = try reader.readInt(u64, .little);
+        try self.segments.resize(self.gpa, segment_size);
+        try reader.readNoEof(std.mem.sliceAsBytes(self.segments.items));
+    }
+    {
+        const stroke_size = try reader.readInt(u64, .little);
+        try self.strokes.resize(self.gpa, stroke_size);
+        try reader.readNoEof(std.mem.sliceAsBytes(self.strokes.items));
+    }
+    self.history.events.clearRetainingCapacity();
+}
+
 pub fn addTrailParticle(self: *@This(), pos: rl.Vector2) void {
     const zone = tracy.initZone(@src(), .{});
     defer zone.deinit();
 
-    std.log.debug("head {d}", .{self.mouse_trail.head});
-    std.log.debug("count {d}", .{self.mouse_trail.count});
     self.mouse_trail.add(.{
         .pos = pos,
         .size = self.brush.radius,
@@ -101,7 +157,7 @@ fn debugDrawHistory(history: History, pos: rl.Vector2) void {
         var buffer: [100]u8 = undefined;
         const y_offset: f32 = (font_size + y_spacing) * @as(f32, @floatFromInt(index));
         const text, const color = switch (entry) {
-            .drawn => |i| .{ std.fmt.bufPrintZ(&buffer, "drawn {d}", .{i}) catch unreachable, rl.Color.green.alpha(alpha) },
+            .drawn => |i| .{ std.fmt.bufPrintZ(&buffer, "drawn1 {d}", .{i}) catch unreachable, rl.Color.green.alpha(alpha) },
             .erased => |i| .{ std.fmt.bufPrintZ(&buffer, "erased {d}", .{i}) catch unreachable, rl.Color.red.alpha(alpha) },
         };
         rl.drawTextEx(rl.getFontDefault(), text, pos.add(.{
@@ -158,21 +214,19 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
     rl.setTraceLogLevel(if (is_debug) .log_debug else .log_warning);
     rl.initWindow(0, 0, "Drawer");
     errdefer rl.closeWindow();
-
-    return .{
-        .gpa = gpa,
-        .color_wheel = .{ .center = rl.Vector2.zero(), .size = 0 },
-        .brush = .{
-            .color = rl.Color.red,
+    var drawer: Drawer = .{ .gpa = gpa, .color_wheel = .{ .center = rl.Vector2.zero(), .size = 0 }, .brush = .{
+        .color = rl.Color.red,
+    }, .old_mouse_position = rl.getMousePosition(), .state = .{
+        .editing = .{
+            .index = 0,
+            .brush_state = .idle,
         },
-        .old_mouse_position = rl.getMousePosition(),
-        .state = .{
-            .editing = .{
-                .index = 0,
-                .brush_state = .idle,
-            },
-        },
+    } };
+    drawer.load() catch |e| {
+        std.log.err("Can't load file {s}", .{@errorName(e)});
     };
+
+    return drawer;
 }
 
 fn drawKeybindingsHelp(arena: std.mem.Allocator, position: rl.Vector2) !void {
@@ -282,6 +336,9 @@ fn drawKeybindingsHelp(arena: std.mem.Allocator, position: rl.Vector2) !void {
 }
 
 pub fn deinit(self: *Drawer) void {
+    self.save() catch |e| {
+        std.log.err("Failed to save: {s}", .{@errorName(e)});
+    };
     self.strokes.deinit(self.gpa);
     self.history.deinit(self.gpa);
     self.segments.deinit(self.gpa);
@@ -383,6 +440,10 @@ pub fn tick(self: *Drawer) !void {
     if (isPressed(config.key_bindings.enable_mouse_trail)) {
         self.mouse_trail_enabled = !self.mouse_trail_enabled;
     }
+    if (isPressed(config.key_bindings.save)) {
+        try self.save();
+        std.log.info("Saved image", .{});
+    }
 
     self.state = switch (self.state) {
         .editing => |*state| blk: {
@@ -441,8 +502,6 @@ pub fn tick(self: *Drawer) !void {
                             .color = self.brush.color,
                         });
                     }
-                    const min_distance = 10;
-                    _ = min_distance; // autofix
                     {
                         // // if previous segment is to small update it instead of adding ncqw.
                         // if (self.strokes.items[self.strokes.items.len - 1].span.size >= 1) {
