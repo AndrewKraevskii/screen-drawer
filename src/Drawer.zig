@@ -69,10 +69,10 @@ fn save(self: *@This()) !void {
     };
     const writer = bw.writer();
     try writer.writeAll("sdv"); // magic
-    try writer.writeInt(u64, self.segments.items.len, .little);
-    try writer.writeAll(std.mem.sliceAsBytes(self.segments.items));
-    try writer.writeInt(u64, self.strokes.items.len, .little);
-    try writer.writeAll(std.mem.sliceAsBytes(self.strokes.items));
+    inline for (.{ "segments", "strokes" }) |field| {
+        try writer.writeInt(u64, @field(self, field).items.len, .little);
+        try writer.writeAll(std.mem.sliceAsBytes(@field(self, field).items));
+    }
 }
 
 fn load(self: *@This()) !void {
@@ -89,15 +89,10 @@ fn load(self: *@This()) !void {
     try reader.readNoEof(&buf); // magic
     if (!std.mem.eql(u8, &buf, "sdv")) return error.MagicNotFound;
 
-    {
-        const segment_size = try reader.readInt(u64, .little);
-        try self.segments.resize(self.gpa, segment_size);
-        try reader.readNoEof(std.mem.sliceAsBytes(self.segments.items));
-    }
-    {
-        const stroke_size = try reader.readInt(u64, .little);
-        try self.strokes.resize(self.gpa, stroke_size);
-        try reader.readNoEof(std.mem.sliceAsBytes(self.strokes.items));
+    inline for (.{ "segments", "strokes" }) |field| {
+        const size = try reader.readInt(u64, .little);
+        try @field(self, field).resize(self.gpa, size);
+        try reader.readNoEof(std.mem.sliceAsBytes(@field(self, field).items));
     }
     self.history.events.clearRetainingCapacity();
 }
