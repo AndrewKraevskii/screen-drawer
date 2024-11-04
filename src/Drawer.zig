@@ -1,11 +1,13 @@
 const std = @import("std");
+
+const _ = @import("tracy-options");
 const rl = @import("raylib");
+const tracy = @import("tracy");
+
+const HistoryStorage = @import("history.zig").History;
+const is_debug = @import("main.zig").is_debug;
 const main = @import("main.zig");
 const config = main.config;
-const is_debug = @import("main.zig").is_debug;
-const HistoryStorage = @import("history.zig").History;
-const tracy = @import("tracy");
-const _ = @import("tracy-options");
 const OverrideQueue = @import("override_queue.zig").OverrideQueue;
 
 gpa: std.mem.Allocator,

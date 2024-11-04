@@ -1,7 +1,9 @@
 const std = @import("std");
+
 const rl = @import("raylib");
-const Drawer = @import("Drawer.zig");
 const tracy = @import("tracy");
+
+const Drawer = @import("Drawer.zig");
 
 pub const config = struct {
     pub const app_name = "screen-drawer";
