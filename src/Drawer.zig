@@ -75,6 +75,8 @@ fn save(self: *@This()) !void {
         try writer.writeInt(u64, @field(self, field).items.len, .little);
         try writer.writeAll(std.mem.sliceAsBytes(@field(self, field).items));
     }
+    try writer.writeInt(u64, self.history.events.items.len, .little);
+    try writer.writeAll(std.mem.sliceAsBytes(self.history.events.items));
 }
 
 fn load(self: *@This()) !void {
@@ -96,7 +98,11 @@ fn load(self: *@This()) !void {
         try @field(self, field).resize(self.gpa, size);
         try reader.readNoEof(std.mem.sliceAsBytes(@field(self, field).items));
     }
-    self.history.events.clearRetainingCapacity();
+    {
+        const size = try reader.readInt(u64, .little);
+        try self.history.events.resize(self.gpa, size);
+        try reader.readNoEof(std.mem.sliceAsBytes(self.history.events.items));
+    }
 }
 
 pub fn addTrailParticle(self: *@This(), pos: rl.Vector2) void {
