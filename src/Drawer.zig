@@ -24,10 +24,7 @@ brush: struct {
     color: rl.Color,
 },
 
-strokes: std.ArrayListUnmanaged(Stroke) = .{},
-segments: std.ArrayListUnmanaged(rl.Vector2) = .{},
-history: History = .{},
-
+canvas: Canvas = .{},
 old_mouse_position: rl.Vector2,
 
 showing_keybindings: bool = false,
@@ -36,6 +33,67 @@ mouse_trail: OverrideQueue(MouseTrailParticle, 0x100) = .empty,
 mouse_trail_enabled: bool = false,
 background_color: rl.Color = .blank,
 background_alpha_selector: ?Bar = null,
+
+const Canvas = struct {
+    strokes: std.ArrayListUnmanaged(Stroke) = .{},
+    segments: std.ArrayListUnmanaged(rl.Vector2) = .{},
+    history: History = .{},
+
+    fn save(canvas: *Canvas, gpa: std.mem.Allocator) !void {
+        const dir_path = try getAppDataDirEnsurePathExist(gpa, save_folder_name);
+        defer gpa.free(dir_path);
+
+        var dir = try std.fs.openDirAbsolute(dir_path, .{});
+        defer dir.close();
+
+        var file = try dir.createFile(save_file_name, .{});
+        defer file.close();
+        var bw = std.io.bufferedWriter(file.writer());
+        defer bw.flush() catch |e| {
+            std.log.err("Failed to save: {s}", .{@errorName(e)});
+        };
+        const writer = bw.writer();
+
+        try writer.writeAll(save_format_magic); // magic
+        inline for (.{ "segments", "strokes" }) |field| {
+            try writer.writeInt(u64, @field(canvas, field).items.len, .little);
+            try writer.writeAll(std.mem.sliceAsBytes(@field(canvas, field).items));
+        }
+        try writer.writeInt(u64, canvas.history.events.items.len, .little);
+        try writer.writeAll(std.mem.sliceAsBytes(canvas.history.events.items));
+    }
+
+    fn load(gpa: std.mem.Allocator) !Canvas {
+        const dir_path = try getAppDataDirEnsurePathExist(gpa, save_folder_name);
+        defer gpa.free(dir_path);
+
+        var canvas = Canvas{};
+
+        var dir = try std.fs.openDirAbsolute(dir_path, .{});
+        defer dir.close();
+
+        var file = try dir.openFile(save_file_name, .{});
+        defer file.close();
+        var br = std.io.bufferedReader(file.reader());
+        const reader = br.reader();
+
+        var buf: [3]u8 = undefined;
+        try reader.readNoEof(&buf); // magic
+        if (!std.mem.eql(u8, &buf, save_format_magic)) return error.MagicNotFound;
+
+        inline for (.{ "segments", "strokes" }) |field| {
+            const size = try reader.readInt(u64, .little);
+            try @field(canvas, field).resize(gpa, size);
+            try reader.readNoEof(std.mem.sliceAsBytes(@field(canvas, field).items));
+        }
+        {
+            const size = try reader.readInt(u64, .little);
+            try canvas.history.events.resize(gpa, size);
+            try reader.readNoEof(std.mem.sliceAsBytes(canvas.history.events.items));
+        }
+        return canvas;
+    }
+};
 
 const History = HistoryStorage(EventTypes);
 
@@ -52,58 +110,6 @@ fn getAppDataDirEnsurePathExist(alloc: std.mem.Allocator, appname: []const u8) !
 const save_folder_name = "screen_drawer_vector";
 const save_file_name = "save.sdv";
 const save_format_magic = "sdv";
-
-fn save(self: *@This()) !void {
-    const dir_path = try getAppDataDirEnsurePathExist(self.gpa, save_folder_name);
-    defer self.gpa.free(dir_path);
-
-    var dir = try std.fs.openDirAbsolute(dir_path, .{});
-    defer dir.close();
-
-    var file = try dir.createFile(save_file_name, .{});
-    defer file.close();
-    var bw = std.io.bufferedWriter(file.writer());
-    defer bw.flush() catch |e| {
-        std.log.err("Failed to save: {s}", .{@errorName(e)});
-    };
-    const writer = bw.writer();
-
-    try writer.writeAll(save_format_magic); // magic
-    inline for (.{ "segments", "strokes" }) |field| {
-        try writer.writeInt(u64, @field(self, field).items.len, .little);
-        try writer.writeAll(std.mem.sliceAsBytes(@field(self, field).items));
-    }
-    try writer.writeInt(u64, self.history.events.items.len, .little);
-    try writer.writeAll(std.mem.sliceAsBytes(self.history.events.items));
-}
-
-fn load(self: *@This()) !void {
-    const dir_path = try getAppDataDirEnsurePathExist(self.gpa, save_folder_name);
-    defer self.gpa.free(dir_path);
-
-    var dir = try std.fs.openDirAbsolute(dir_path, .{});
-    defer dir.close();
-
-    var file = try dir.openFile(save_file_name, .{});
-    defer file.close();
-    var br = std.io.bufferedReader(file.reader());
-    const reader = br.reader();
-
-    var buf: [3]u8 = undefined;
-    try reader.readNoEof(&buf); // magic
-    if (!std.mem.eql(u8, &buf, save_format_magic)) return error.MagicNotFound;
-
-    inline for (.{ "segments", "strokes" }) |field| {
-        const size = try reader.readInt(u64, .little);
-        try @field(self, field).resize(self.gpa, size);
-        try reader.readNoEof(std.mem.sliceAsBytes(@field(self, field).items));
-    }
-    {
-        const size = try reader.readInt(u64, .little);
-        try self.history.events.resize(self.gpa, size);
-        try reader.readNoEof(std.mem.sliceAsBytes(self.history.events.items));
-    }
-}
 
 pub fn addTrailParticle(self: *@This(), pos: rl.Vector2) void {
     const zone = tracy.initZone(@src(), .{});
@@ -180,15 +186,15 @@ const EventTypes = union(enum) {
     pub fn redo(event: EventTypes, state: *Drawer) void {
         tracy.message("redo");
         switch (event) {
-            .drawn => |index| state.strokes.items[index].is_active = true,
-            .erased => |index| state.strokes.items[index].is_active = false,
+            .drawn => |index| state.canvas.strokes.items[index].is_active = true,
+            .erased => |index| state.canvas.strokes.items[index].is_active = false,
         }
     }
     pub fn undo(event: EventTypes, state: *Drawer) void {
         tracy.message("undo");
         switch (event) {
-            .erased => |index| state.strokes.items[index].is_active = true,
-            .drawn => |index| state.strokes.items[index].is_active = false,
+            .erased => |index| state.canvas.strokes.items[index].is_active = true,
+            .drawn => |index| state.canvas.strokes.items[index].is_active = false,
         }
     }
 };
@@ -228,8 +234,10 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
         .old_mouse_position = rl.getMousePosition(),
         .brush_state = .idle,
     };
-    drawer.load() catch |e| {
+    drawer.canvas = Canvas.load(gpa) catch |e| canvas: {
         std.log.err("Can't load file {s}", .{@errorName(e)});
+
+        break :canvas Canvas{};
     };
 
     return drawer;
@@ -342,12 +350,12 @@ fn drawKeybindingsHelp(arena: std.mem.Allocator, position: rl.Vector2) !void {
 }
 
 pub fn deinit(self: *Drawer) void {
-    self.save() catch |e| {
+    self.canvas.save(self.gpa) catch |e| {
         std.log.err("Failed to save: {s}", .{@errorName(e)});
     };
-    self.strokes.deinit(self.gpa);
-    self.history.deinit(self.gpa);
-    self.segments.deinit(self.gpa);
+    self.canvas.strokes.deinit(self.gpa);
+    self.canvas.history.deinit(self.gpa);
+    self.canvas.segments.deinit(self.gpa);
     rl.closeWindow();
 }
 
@@ -432,9 +440,9 @@ pub fn tick(self: *Drawer) !void {
     rl.beginDrawing();
     rl.clearBackground(self.background_color);
 
-    tracy.plot(i64, "history size", @intCast(self.history.events.items.len));
-    tracy.plot(i64, "strokes size", @intCast(self.strokes.items.len));
-    tracy.plot(i64, "segments size", @intCast(self.segments.items.len));
+    tracy.plot(i64, "history size", @intCast(self.canvas.history.events.items.len));
+    tracy.plot(i64, "strokes size", @intCast(self.canvas.strokes.items.len));
+    tracy.plot(i64, "segments size", @intCast(self.canvas.segments.items.len));
 
     const mouse_position = rl.getMousePosition();
     defer self.old_mouse_position = mouse_position;
@@ -447,7 +455,7 @@ pub fn tick(self: *Drawer) !void {
         self.mouse_trail_enabled = !self.mouse_trail_enabled;
     }
     if (isPressed(config.key_bindings.save)) {
-        try self.save();
+        try self.canvas.save(self.gpa);
         std.log.info("Saved image", .{});
     }
 
@@ -455,12 +463,12 @@ pub fn tick(self: *Drawer) !void {
         const zone = tracy.initZone(@src(), .{ .name = "Line drawing" });
         defer zone.deinit();
 
-        for (self.strokes.items) |stroke| {
+        for (self.canvas.strokes.items) |stroke| {
             if (stroke.is_active) {
                 if (stroke.span.size < 2) continue;
                 var iter = std.mem.window(
                     rl.Vector2,
-                    self.segments.items[stroke.span.start..][0..stroke.span.size],
+                    self.canvas.segments.items[stroke.span.start..][0..stroke.span.size],
                     2,
                     1,
                 );
@@ -471,22 +479,22 @@ pub fn tick(self: *Drawer) !void {
         }
     }
     if (isPressed(config.key_bindings.undo)) {
-        if (self.history.undo()) |undo_event| {
+        if (self.canvas.history.undo()) |undo_event| {
             undo_event.undo(self);
         }
     }
     if (isPressed(config.key_bindings.redo)) {
-        if (self.history.redo()) |redo_event| {
+        if (self.canvas.history.redo()) |redo_event| {
             redo_event.redo(self);
         }
     }
 
     self.brush_state = switch (self.brush_state) {
         .idle => if (isDown(config.key_bindings.draw)) state: {
-            try self.history.addHistoryEntry(self.gpa, .{ .drawn = self.strokes.items.len });
+            try self.canvas.history.addHistoryEntry(self.gpa, .{ .drawn = self.canvas.strokes.items.len });
 
-            try self.strokes.append(self.gpa, .{ .span = .{
-                .start = self.segments.items.len,
+            try self.canvas.strokes.append(self.gpa, .{ .span = .{
+                .start = self.canvas.segments.items.len,
                 .size = 0,
             }, .color = self.brush.color });
             break :state .drawing;
@@ -498,8 +506,8 @@ pub fn tick(self: *Drawer) !void {
         } else .idle,
 
         .drawing => state: {
-            if (self.strokes.items.len == 0) {
-                try self.strokes.append(self.gpa, .{
+            if (self.canvas.strokes.items.len == 0) {
+                try self.canvas.strokes.append(self.gpa, .{
                     .span = .{
                         .start = 0,
                         .size = 0,
@@ -511,9 +519,9 @@ pub fn tick(self: *Drawer) !void {
                 // if previous segment is to small update it instead of adding new.
                 const min_distance = 10;
                 const min_distance_squared = min_distance * min_distance;
-                if (self.strokes.items[self.strokes.items.len - 1].span.size >= 1) {
-                    const start = self.segments.items[self.segments.items.len - 2];
-                    const end = &self.segments.items[self.segments.items.len - 1];
+                if (self.canvas.strokes.items[self.canvas.strokes.items.len - 1].span.size >= 1) {
+                    const start = self.canvas.segments.items[self.canvas.segments.items.len - 2];
+                    const end = &self.canvas.segments.items[self.canvas.segments.items.len - 1];
                     if (start.distanceSqr(end.*) < min_distance_squared) {
                         end.* = rl.getMousePosition();
                         break :stroke_add_block;
@@ -521,9 +529,9 @@ pub fn tick(self: *Drawer) !void {
                 }
 
                 // add new stroke point
-                self.strokes.items[self.strokes.items.len - 1].span.size += 1;
+                self.canvas.strokes.items[self.canvas.strokes.items.len - 1].span.size += 1;
 
-                try self.segments.append(
+                try self.canvas.segments.append(
                     self.gpa,
                     rl.getMousePosition(),
                 );
@@ -536,29 +544,29 @@ pub fn tick(self: *Drawer) !void {
         .eraser => state: {
             const radius = config.eraser_thickness / 2;
 
-            for (self.strokes.items, 0..) |*stroke, index| {
+            for (self.canvas.strokes.items, 0..) |*stroke, index| {
                 if (stroke.is_active) {
                     var iter = std.mem.window(
                         rl.Vector2,
-                        self.segments.items[stroke.span.start..][0..stroke.span.size],
+                        self.canvas.segments.items[stroke.span.start..][0..stroke.span.size],
                         2,
                         1,
                     );
                     while (iter.next()) |line| {
                         if (line.len == 0) continue;
-                        const line_intersects_cursor, const line_intersects_cursor_line = if (line.len > 1) blk: {
-                            const line_intersects_cursor = rl.checkCollisionCircleLine(rl.getMousePosition(), radius, line[0], line[1]);
+                        const line_intersects_mouse, const line_intersects_mouse_line = if (line.len > 1) blk: {
+                            const line_intersects_mouse = rl.checkCollisionCircleLine(rl.getMousePosition(), radius, line[0], line[1]);
                             var collision_point: rl.Vector2 = undefined;
-                            const line_intersects_cursor_line = rl.checkCollisionLines(rl.getMousePosition(), self.old_mouse_position, line[0], line[1], &collision_point);
-                            break :blk .{ line_intersects_cursor, line_intersects_cursor_line };
+                            const line_intersects_mouse_line = rl.checkCollisionLines(rl.getMousePosition(), self.old_mouse_position, line[0], line[1], &collision_point);
+                            break :blk .{ line_intersects_mouse, line_intersects_mouse_line };
                         } else blk: {
-                            const line_intersects_cursor = rl.checkCollisionPointCircle(line[0], rl.getMousePosition(), radius);
-                            const line_intersects_cursor_line = rl.checkCollisionPointLine(line[0], rl.getMousePosition(), self.old_mouse_position, config.eraser_thickness);
-                            break :blk .{ line_intersects_cursor, line_intersects_cursor_line };
+                            const line_intersects_mouse = rl.checkCollisionPointCircle(line[0], rl.getMousePosition(), radius);
+                            const line_intersects_mouse_line = rl.checkCollisionPointLine(line[0], rl.getMousePosition(), self.old_mouse_position, config.eraser_thickness);
+                            break :blk .{ line_intersects_mouse, line_intersects_mouse_line };
                         };
 
-                        if (line_intersects_cursor or line_intersects_cursor_line) {
-                            try self.history.addHistoryEntry(self.gpa, .{ .erased = index });
+                        if (line_intersects_mouse or line_intersects_mouse_line) {
+                            try self.canvas.history.addHistoryEntry(self.gpa, .{ .erased = index });
                             stroke.is_active = false;
                             break;
                         }
@@ -584,7 +592,7 @@ pub fn tick(self: *Drawer) !void {
     };
 
     if (is_debug)
-        debugDrawHistory(self.history, .{
+        debugDrawHistory(self.canvas.history, .{
             .x = 20,
             .y = 10,
         });
@@ -594,7 +602,7 @@ pub fn tick(self: *Drawer) !void {
         self.color_wheel.size = expDecayWithAnimationSpeed(self.color_wheel.size, 0, rl.getFrameTime());
         _ = self.color_wheel.draw(mouse_position);
     }
-    // Draw cursor
+    // Draw mouse
 
     if (self.brush_state == .eraser) {
         rl.drawCircleLinesV(mouse_position, config.eraser_thickness / 2, self.brush.color);
