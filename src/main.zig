@@ -21,7 +21,7 @@ pub const config = struct {
         pub const toggle_keybindings = .{ rl.KeyboardKey.key_h };
         pub const enable_mouse_trail = .{ rl.KeyboardKey.key_t };
         pub const change_brightness  = .{ rl.KeyboardKey.key_b };
-        pub const save  = .{ rl.KeyboardKey.key_s };
+        pub const save               = .{ rl.KeyboardKey.key_s };
         // zig fmt: on
 
         comptime {

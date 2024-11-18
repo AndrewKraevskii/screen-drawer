@@ -13,14 +13,11 @@ const OverrideQueue = @import("override_queue.zig").OverrideQueue;
 gpa: std.mem.Allocator,
 
 state: union(enum) {
-    editing: struct {
-        index: usize,
-        brush_state: union(enum) {
-            idle,
-            drawing,
-            eraser,
-            picking_color,
-        },
+    brush_state: union(enum) {
+        idle,
+        drawing,
+        eraser,
+        picking_color,
     },
 },
 
@@ -31,8 +28,6 @@ brush: struct {
 },
 
 strokes: std.ArrayListUnmanaged(Stroke) = .{},
-// TODO: use less space for segment.
-// One point per segment and u16 to store position instead of float.
 segments: std.ArrayListUnmanaged(rl.Vector2) = .{},
 history: History = .{},
 
@@ -57,20 +52,26 @@ fn getAppDataDirEnsurePathExist(alloc: std.mem.Allocator, appname: []const u8) !
 }
 
 const save_folder_name = "screen_drawer_vector";
+const save_file_name = "save.sdv";
+
+const save_format_magic = "sdv";
 
 fn save(self: *@This()) !void {
     const dir_path = try getAppDataDirEnsurePathExist(self.gpa, save_folder_name);
     defer self.gpa.free(dir_path);
+
     var dir = try std.fs.openDirAbsolute(dir_path, .{});
     defer dir.close();
-    var file = try dir.createFile("save.sdv", .{});
+
+    var file = try dir.createFile(save_file_name, .{});
     defer file.close();
     var bw = std.io.bufferedWriter(file.writer());
     defer bw.flush() catch |e| {
         std.log.err("Failed to save: {s}", .{@errorName(e)});
     };
     const writer = bw.writer();
-    try writer.writeAll("sdv"); // magic
+
+    try writer.writeAll(save_format_magic); // magic
     inline for (.{ "segments", "strokes" }) |field| {
         try writer.writeInt(u64, @field(self, field).items.len, .little);
         try writer.writeAll(std.mem.sliceAsBytes(@field(self, field).items));
@@ -82,16 +83,18 @@ fn save(self: *@This()) !void {
 fn load(self: *@This()) !void {
     const dir_path = try getAppDataDirEnsurePathExist(self.gpa, save_folder_name);
     defer self.gpa.free(dir_path);
+
     var dir = try std.fs.openDirAbsolute(dir_path, .{});
     defer dir.close();
-    var file = try dir.openFile("save.sdv", .{});
+
+    var file = try dir.openFile(save_file_name, .{});
     defer file.close();
     var br = std.io.bufferedReader(file.reader());
     const reader = br.reader();
 
     var buf: [3]u8 = undefined;
     try reader.readNoEof(&buf); // magic
-    if (!std.mem.eql(u8, &buf, "sdv")) return error.MagicNotFound;
+    if (!std.mem.eql(u8, &buf, save_format_magic)) return error.MagicNotFound;
 
     inline for (.{ "segments", "strokes" }) |field| {
         const size = try reader.readInt(u64, .little);
@@ -127,6 +130,7 @@ pub fn updateTrail(self: *@This()) void {
         }
     }
 }
+
 pub fn drawTrail(self: *@This()) void {
     const zone = tracy.initZone(@src(), .{});
     defer zone.deinit();
@@ -199,8 +203,8 @@ const Stroke = struct {
 };
 
 const Span = struct {
-    start: usize,
-    size: usize,
+    start: u64,
+    size: u64,
 };
 
 pub fn init(gpa: std.mem.Allocator) !Drawer {
@@ -220,10 +224,7 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
     var drawer: Drawer = .{ .gpa = gpa, .color_wheel = .{ .center = rl.Vector2.zero(), .size = 0 }, .brush = .{
         .color = rl.Color.red,
     }, .old_mouse_position = rl.getMousePosition(), .state = .{
-        .editing = .{
-            .index = 0,
-            .brush_state = .idle,
-        },
+        .brush_state = .idle,
     } };
     drawer.load() catch |e| {
         std.log.err("Can't load file {s}", .{@errorName(e)});
@@ -349,7 +350,9 @@ pub fn deinit(self: *Drawer) void {
 }
 
 pub fn run(self: *Drawer) !void {
-    while (!rl.windowShouldClose() and (!config.exit_on_unfocus or rl.isWindowFocused())) {
+    while (!(rl.windowShouldClose() or
+        (config.exit_on_unfocus and !rl.isWindowFocused())))
+    {
         tracy.frameMark();
         try tick(self);
     }
@@ -433,10 +436,8 @@ pub fn tick(self: *Drawer) !void {
 
     const mouse_position = rl.getMousePosition();
     defer self.old_mouse_position = mouse_position;
+
     // :global input
-    // {
-    //     self.background_color = self.background_color.alpha(self.background_color.normalize().w + rl.getMouseWheelMove() / 10);
-    // }
     if (isPressed(config.key_bindings.toggle_keybindings)) {
         self.showing_keybindings = !self.showing_keybindings;
     }
@@ -448,149 +449,149 @@ pub fn tick(self: *Drawer) !void {
         std.log.info("Saved image", .{});
     }
 
-    self.state = switch (self.state) {
-        .editing => |*state| blk: {
-            {
-                const zone = tracy.initZone(@src(), .{ .name = "Line drawing" });
-                defer zone.deinit();
+    {
+        const zone = tracy.initZone(@src(), .{ .name = "Line drawing" });
+        defer zone.deinit();
 
-                for (self.strokes.items) |stroke| {
-                    if (stroke.is_active) {
-                        if (stroke.span.size < 2) continue;
-                        var iter = std.mem.window(
-                            rl.Vector2,
-                            self.segments.items[stroke.span.start..][0..stroke.span.size],
-                            2,
-                            1,
-                        );
-                        while (iter.next()) |line| {
-                            rl.drawLineEx(line[0], line[1], self.brush.radius, stroke.color);
-                        }
-                    }
+        for (self.strokes.items) |stroke| {
+            if (stroke.is_active) {
+                if (stroke.span.size < 2) continue;
+                var iter = std.mem.window(
+                    rl.Vector2,
+                    self.segments.items[stroke.span.start..][0..stroke.span.size],
+                    2,
+                    1,
+                );
+                while (iter.next()) |line| {
+                    rl.drawLineEx(line[0], line[1], self.brush.radius, stroke.color);
                 }
             }
-            if (isPressed(config.key_bindings.undo)) {
-                if (self.history.undo()) |undo_event| {
-                    undo_event.undo(self);
-                }
-            }
-            if (isPressed(config.key_bindings.redo)) {
-                if (self.history.redo()) |redo_event| {
-                    redo_event.redo(self);
-                }
-            }
-            state.brush_state = switch (state.brush_state) {
-                .idle => if (isDown(config.key_bindings.draw)) state: {
-                    try self.history.addHistoryEntry(self.gpa, .{ .drawn = self.strokes.items.len });
+        }
+    }
+    if (isPressed(config.key_bindings.undo)) {
+        if (self.history.undo()) |undo_event| {
+            undo_event.undo(self);
+        }
+    }
+    if (isPressed(config.key_bindings.redo)) {
+        if (self.history.redo()) |redo_event| {
+            redo_event.redo(self);
+        }
+    }
 
-                    try self.strokes.append(self.gpa, .{ .span = .{
-                        .start = self.segments.items.len,
+    self.state.brush_state = switch (self.state.brush_state) {
+        .idle => if (isDown(config.key_bindings.draw)) state: {
+            try self.history.addHistoryEntry(self.gpa, .{ .drawn = self.strokes.items.len });
+
+            try self.strokes.append(self.gpa, .{ .span = .{
+                .start = self.segments.items.len,
+                .size = 0,
+            }, .color = self.brush.color });
+            break :state .drawing;
+        } else if (isDown(config.key_bindings.eraser))
+            .eraser
+        else if (isPressed(config.key_bindings.picking_color)) state: {
+            self.color_wheel = .{ .center = mouse_position, .size = 0 };
+            break :state .picking_color;
+        } else .idle,
+
+        .drawing => state: {
+            if (self.strokes.items.len == 0) {
+                try self.strokes.append(self.gpa, .{
+                    .span = .{
+                        .start = 0,
                         .size = 0,
-                    }, .color = self.brush.color });
-                    break :state .drawing;
-                } else if (isDown(config.key_bindings.eraser))
-                    .eraser
-                else if (isPressed(config.key_bindings.picking_color)) state: {
-                    self.color_wheel = .{ .center = mouse_position, .size = 0 };
-                    break :state .picking_color;
-                } else .idle,
-
-                .drawing => state: {
-                    if (self.strokes.items.len == 0) {
-                        try self.strokes.append(self.gpa, .{
-                            .span = .{
-                                .start = 0,
-                                .size = 0,
-                            },
-                            .color = self.brush.color,
-                        });
+                    },
+                    .color = self.brush.color,
+                });
+            }
+            stroke_add_block: {
+                // if previous segment is to small update it instead of adding new.
+                const min_distance = 10;
+                const min_distance_squared = min_distance * min_distance;
+                if (self.strokes.items[self.strokes.items.len - 1].span.size >= 1) {
+                    const start = self.segments.items[self.segments.items.len - 2];
+                    const end = &self.segments.items[self.segments.items.len - 1];
+                    if (start.distanceSqr(end.*) < min_distance_squared) {
+                        end.* = rl.getMousePosition();
+                        break :stroke_add_block;
                     }
-                    {
-                        // // if previous segment is to small update it instead of adding ncqw.
-                        // if (self.strokes.items[self.strokes.items.len - 1].span.size >= 1) {
-                        //     const prev = &self.segments.items[self.segments.items.len - 2 ..];
-                        //     if (prev[0].distanceSqr(prev[1]) < min_distance * min_distance) {
-                        //         prev[1] = rl.getMousePosition();
-                        //         break :stroke_add_block;
-                        //     }
-                        // }
+                }
 
-                        self.strokes.items[self.strokes.items.len - 1].span.size += 1;
-                        self.strokes.items[self.strokes.items.len - 1].color = self.brush.color;
+                // add new stroke point
+                self.strokes.items[self.strokes.items.len - 1].span.size += 1;
 
-                        try self.segments.append(
-                            self.gpa,
-                            rl.getMousePosition(),
-                        );
-                    }
-                    break :state if (isDown(config.key_bindings.draw))
-                        .drawing
-                    else
-                        .idle;
-                },
-                .eraser => state: {
-                    const radius = config.eraser_thickness / 2;
+                try self.segments.append(
+                    self.gpa,
+                    rl.getMousePosition(),
+                );
+            }
+            break :state if (isDown(config.key_bindings.draw))
+                .drawing
+            else
+                .idle;
+        },
+        .eraser => state: {
+            const radius = config.eraser_thickness / 2;
 
-                    for (self.strokes.items, 0..) |*stroke, index| {
-                        if (stroke.is_active) {
-                            var iter = std.mem.window(
-                                rl.Vector2,
-                                self.segments.items[stroke.span.start..][0..stroke.span.size],
-                                2,
-                                1,
-                            );
-                            while (iter.next()) |line| {
-                                if (rl.checkCollisionCircleLine(rl.getMousePosition(), radius, line[0], line[1])) {
-                                    try self.history.addHistoryEntry(self.gpa, .{ .erased = index });
-                                    stroke.is_active = false;
-                                    break;
-                                }
-                            }
+            for (self.strokes.items, 0..) |*stroke, index| {
+                if (stroke.is_active) {
+                    var iter = std.mem.window(
+                        rl.Vector2,
+                        self.segments.items[stroke.span.start..][0..stroke.span.size],
+                        2,
+                        1,
+                    );
+                    while (iter.next()) |line| {
+                        if (rl.checkCollisionCircleLine(rl.getMousePosition(), radius, line[0], line[1])) {
+                            try self.history.addHistoryEntry(self.gpa, .{ .erased = index });
+                            stroke.is_active = false;
+                            break;
                         }
                     }
-
-                    break :state if (isDown(config.key_bindings.eraser)) .eraser else .idle;
-                },
-                .picking_color => state: {
-                    self.brush.color = self.color_wheel.draw(mouse_position);
-                    break :state if (!isDown(config.key_bindings.picking_color))
-                        .idle
-                    else {
-                        self.color_wheel.size = expDecayWithAnimationSpeed(
-                            self.color_wheel.size,
-                            config.color_wheel_size,
-                            rl.getFrameTime(),
-                        );
-                        break :state .picking_color;
-                    };
-                },
-            };
-
-            debugDrawHistory(self.history, .{
-                .x = 20,
-                .y = 10,
-            });
-
-            // Shrink color picker
-            if (state.brush_state != .picking_color) {
-                self.color_wheel.size = expDecayWithAnimationSpeed(self.color_wheel.size, 0, rl.getFrameTime());
-                _ = self.color_wheel.draw(mouse_position);
-            }
-            // Draw cursor
-            if (state.brush_state == .eraser) {
-                rl.drawCircleLinesV(mouse_position, config.eraser_thickness / 2, self.brush.color);
-            } else {
-                self.updateTrail();
-                if (self.mouse_trail_enabled) {
-                    self.addTrailParticle(mouse_position);
-                    self.drawTrail();
                 }
-                rl.drawCircleV(mouse_position, self.brush.radius * 2, self.brush.color);
             }
 
-            break :blk self.state;
+            break :state if (isDown(config.key_bindings.eraser)) .eraser else .idle;
+        },
+        .picking_color => state: {
+            self.brush.color = self.color_wheel.draw(mouse_position);
+            break :state if (!isDown(config.key_bindings.picking_color))
+                .idle
+            else {
+                self.color_wheel.size = expDecayWithAnimationSpeed(
+                    self.color_wheel.size,
+                    config.color_wheel_size,
+                    rl.getFrameTime(),
+                );
+                break :state .picking_color;
+            };
         },
     };
+
+    if (is_debug)
+        debugDrawHistory(self.history, .{
+            .x = 20,
+            .y = 10,
+        });
+
+    // Shrink color picker
+    if (self.state.brush_state != .picking_color) {
+        self.color_wheel.size = expDecayWithAnimationSpeed(self.color_wheel.size, 0, rl.getFrameTime());
+        _ = self.color_wheel.draw(mouse_position);
+    }
+    // Draw cursor
+    if (self.state.brush_state == .eraser) {
+        rl.drawCircleLinesV(mouse_position, config.eraser_thickness / 2, self.brush.color);
+    } else {
+        self.updateTrail();
+        if (self.mouse_trail_enabled) {
+            self.addTrailParticle(mouse_position);
+            self.drawTrail();
+        }
+        rl.drawCircleV(mouse_position, self.brush.radius * 2, self.brush.color);
+    }
+
     if (isDown(config.key_bindings.change_brightness)) {
         if (self.background_alpha_selector) |bar| {
             self.background_color = self.background_color.alpha(bar.draw(mouse_position));
@@ -603,13 +604,6 @@ pub fn tick(self: *Drawer) !void {
         }
     }
 
-    // self.background_color = self.background_color.alpha((Bar{
-    //     .center = .init(@floatFromInt(@divFloor(rl.getScreenWidth(), 2)), @floatFromInt(@divFloor(rl.getScreenHeight(), 2))),
-    //     .min = 0,
-    //     .max = 1,
-    //     .scale = @as(f32, @floatFromInt(rl.getScreenHeight())) * 0.5,
-    //     .text = "Background alpha",
-    // }).draw(mouse_position));
     if (self.showing_keybindings) {
         try drawKeybindingsHelp(arena.allocator(), .init(100, 100));
     }
