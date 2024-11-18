@@ -544,7 +544,10 @@ pub fn tick(self: *Drawer) !void {
                         1,
                     );
                     while (iter.next()) |line| {
-                        if (rl.checkCollisionCircleLine(rl.getMousePosition(), radius, line[0], line[1])) {
+                        const line_intersects_cursor = rl.checkCollisionCircleLine(rl.getMousePosition(), radius, line[0], line[1]);
+                        var collision_point: rl.Vector2 = undefined;
+                        const line_intersects_cursor_line = rl.checkCollisionLines(rl.getMousePosition(), self.old_mouse_position, line[0], line[1], &collision_point);
+                        if (line_intersects_cursor or line_intersects_cursor_line) {
                             try self.history.addHistoryEntry(self.gpa, .{ .erased = index });
                             stroke.is_active = false;
                             break;
