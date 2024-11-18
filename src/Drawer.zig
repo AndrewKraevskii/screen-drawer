@@ -217,6 +217,7 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
         .window_undecorated = true,
         .window_maximized = true,
         .vsync_hint = true,
+        .msaa_4x_hint = true,
     });
     rl.setTraceLogLevel(if (is_debug) .log_debug else .log_warning);
     rl.initWindow(0, 0, "Drawer");
