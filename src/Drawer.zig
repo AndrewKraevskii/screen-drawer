@@ -1,6 +1,5 @@
 const std = @import("std");
 
-const _ = @import("tracy-options");
 const rl = @import("raylib");
 const tracy = @import("tracy");
 
@@ -12,13 +11,11 @@ const OverrideQueue = @import("override_queue.zig").OverrideQueue;
 
 gpa: std.mem.Allocator,
 
-state: union(enum) {
-    brush_state: union(enum) {
-        idle,
-        drawing,
-        eraser,
-        picking_color,
-    },
+brush_state: union(enum) {
+    idle,
+    drawing,
+    eraser,
+    picking_color,
 },
 
 color_wheel: ColorWheel,
@@ -53,7 +50,6 @@ fn getAppDataDirEnsurePathExist(alloc: std.mem.Allocator, appname: []const u8) !
 
 const save_folder_name = "screen_drawer_vector";
 const save_file_name = "save.sdv";
-
 const save_format_magic = "sdv";
 
 fn save(self: *@This()) !void {
@@ -115,7 +111,7 @@ pub fn addTrailParticle(self: *@This(), pos: rl.Vector2) void {
     self.mouse_trail.add(.{
         .pos = pos,
         .size = self.brush.radius,
-        .ttl = 0.2,
+        .time_to_live = 0.2,
     });
 }
 
@@ -126,7 +122,7 @@ pub fn updateTrail(self: *@This()) void {
     inline for (self.mouse_trail.orderedSlices()) |slice| {
         for (slice) |*particle| {
             particle.size *= 0.9;
-            particle.ttl -= rl.getFrameTime();
+            particle.time_to_live -= rl.getFrameTime();
         }
     }
 }
@@ -139,7 +135,7 @@ pub fn drawTrail(self: *@This()) void {
     var prev: ?MouseTrailParticle = null;
     inline for (self.mouse_trail.orderedSlices()) |slice| {
         for (slice) |*particle| {
-            if (particle.ttl < 0) continue;
+            if (particle.time_to_live < 0) continue;
             if (prev == null) {
                 prev = particle.*;
                 continue;
@@ -153,7 +149,7 @@ pub fn drawTrail(self: *@This()) void {
 const MouseTrailParticle = struct {
     pos: rl.Vector2,
     size: f32,
-    ttl: f32,
+    time_to_live: f32,
 };
 
 fn debugDrawHistory(history: History, pos: rl.Vector2) void {
@@ -222,11 +218,15 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
     rl.setTraceLogLevel(if (is_debug) .log_debug else .log_warning);
     rl.initWindow(0, 0, "Drawer");
     errdefer rl.closeWindow();
-    var drawer: Drawer = .{ .gpa = gpa, .color_wheel = .{ .center = rl.Vector2.zero(), .size = 0 }, .brush = .{
-        .color = rl.Color.red,
-    }, .old_mouse_position = rl.getMousePosition(), .state = .{
+    var drawer: Drawer = .{
+        .gpa = gpa,
+        .color_wheel = .{ .center = rl.Vector2.zero(), .size = 0 },
+        .brush = .{
+            .color = rl.Color.red,
+        },
+        .old_mouse_position = rl.getMousePosition(),
         .brush_state = .idle,
-    } };
+    };
     drawer.load() catch |e| {
         std.log.err("Can't load file {s}", .{@errorName(e)});
     };
@@ -480,7 +480,7 @@ pub fn tick(self: *Drawer) !void {
         }
     }
 
-    self.state.brush_state = switch (self.state.brush_state) {
+    self.brush_state = switch (self.brush_state) {
         .idle => if (isDown(config.key_bindings.draw)) state: {
             try self.history.addHistoryEntry(self.gpa, .{ .drawn = self.strokes.items.len });
 
@@ -577,20 +577,23 @@ pub fn tick(self: *Drawer) !void {
         });
 
     // Shrink color picker
-    if (self.state.brush_state != .picking_color) {
+    if (self.brush_state != .picking_color) {
         self.color_wheel.size = expDecayWithAnimationSpeed(self.color_wheel.size, 0, rl.getFrameTime());
         _ = self.color_wheel.draw(mouse_position);
     }
     // Draw cursor
-    if (self.state.brush_state == .eraser) {
+
+    if (self.brush_state == .eraser) {
         rl.drawCircleLinesV(mouse_position, config.eraser_thickness / 2, self.brush.color);
     } else {
-        self.updateTrail();
-        if (self.mouse_trail_enabled) {
-            self.addTrailParticle(mouse_position);
-            self.drawTrail();
-        }
         rl.drawCircleV(mouse_position, self.brush.radius * 2, self.brush.color);
+    }
+
+    // Draw trail
+    self.updateTrail();
+    if (self.mouse_trail_enabled) {
+        self.addTrailParticle(mouse_position);
+        self.drawTrail();
     }
 
     if (isDown(config.key_bindings.change_brightness)) {

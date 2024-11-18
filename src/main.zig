@@ -16,8 +16,6 @@ pub const config = struct {
         pub const picking_color      = .{ rl.KeyboardKey.key_left_bracket };
         pub const eraser             = .{ rl.MouseButton.mouse_button_right };
         pub const confirm            = .{ rl.MouseButton.mouse_button_left };
-        pub const scroll_up          = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
-        pub const scroll_down        = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };
         pub const toggle_keybindings = .{ rl.KeyboardKey.key_h };
         pub const enable_mouse_trail = .{ rl.KeyboardKey.key_t };
         pub const change_brightness  = .{ rl.KeyboardKey.key_b };
@@ -43,7 +41,6 @@ pub const config = struct {
     pub const line_thickness = 4;
     pub const eraser_thickness = 40;
     pub const color_wheel_size = 100;
-    pub const images_on_one_row = 4;
 };
 
 pub const is_debug = @import("builtin").mode == .Debug;
