@@ -10,16 +10,16 @@ pub const config = struct {
 
     pub const key_bindings = struct {
         // zig fmt: off
-        pub const draw               = .{ rl.MouseButton.mouse_button_left };
-        pub const undo               = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };
-        pub const redo               = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
-        pub const picking_color      = .{ rl.KeyboardKey.key_left_bracket };
-        pub const eraser             = .{ rl.MouseButton.mouse_button_right };
-        pub const confirm            = .{ rl.MouseButton.mouse_button_left };
-        pub const toggle_keybindings = .{ rl.KeyboardKey.key_h };
-        pub const enable_mouse_trail = .{ rl.KeyboardKey.key_t };
-        pub const change_brightness  = .{ rl.KeyboardKey.key_b };
-        pub const save               = .{ rl.KeyboardKey.key_s };
+        pub const draw                = .{ rl.MouseButton.mouse_button_left };
+        pub const undo                = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };
+        pub const redo                = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
+        pub const picking_color       = .{ rl.KeyboardKey.key_left_bracket };
+        pub const eraser              = .{ rl.MouseButton.mouse_button_right };
+        pub const confirm             = .{ rl.MouseButton.mouse_button_left };
+        pub const toggle_keybindings  = .{ rl.KeyboardKey.key_h };
+        pub const enable_cursor_trail = .{ rl.KeyboardKey.key_t };
+        pub const change_brightness   = .{ rl.KeyboardKey.key_b };
+        pub const save                = .{ rl.KeyboardKey.key_s };
         // zig fmt: on
 
         comptime {

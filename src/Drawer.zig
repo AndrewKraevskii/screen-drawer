@@ -25,14 +25,19 @@ brush: struct {
 },
 
 canvas: Canvas = .{},
-old_mouse_position: rl.Vector2,
+old_cursor_position: rl.Vector2,
 
 showing_keybindings: bool = false,
 
-mouse_trail: OverrideQueue(MouseTrailParticle, 0x100) = .empty,
-mouse_trail_enabled: bool = false,
+cursor_trail: OverrideQueue(TrailParticle, 0x100) = .empty,
+cursor_trail_enabled: bool = false,
+drawing_particles: OverrideQueue(DrawingParticle, 0x100) = .empty,
+drawing_particles_enabled: bool = false,
+
 background_color: rl.Color = .blank,
 background_alpha_selector: ?Bar = null,
+
+random: std.Random.DefaultPrng,
 
 const Canvas = struct {
     strokes: std.ArrayListUnmanaged(Stroke) = .{},
@@ -115,10 +120,10 @@ pub fn addTrailParticle(self: *@This(), pos: rl.Vector2) void {
     const zone = tracy.initZone(@src(), .{});
     defer zone.deinit();
 
-    self.mouse_trail.add(.{
+    self.cursor_trail.add(.{
         .pos = pos,
-        .size = self.brush.radius,
         .time_to_live = 0.2,
+        .size = self.brush.radius,
     });
 }
 
@@ -126,7 +131,7 @@ pub fn updateTrail(self: *@This()) void {
     const zone = tracy.initZone(@src(), .{});
     defer zone.deinit();
 
-    inline for (self.mouse_trail.orderedSlices()) |slice| {
+    inline for (self.cursor_trail.orderedSlices()) |slice| {
         for (slice) |*particle| {
             particle.size *= 0.9;
             particle.time_to_live -= rl.getFrameTime();
@@ -138,9 +143,9 @@ pub fn drawTrail(self: *@This()) void {
     const zone = tracy.initZone(@src(), .{});
     defer zone.deinit();
 
-    if (self.mouse_trail.count == 0) return;
-    var prev: ?MouseTrailParticle = null;
-    inline for (self.mouse_trail.orderedSlices()) |slice| {
+    if (self.cursor_trail.count == 0) return;
+    var prev: ?TrailParticle = null;
+    inline for (self.cursor_trail.orderedSlices()) |slice| {
         for (slice) |*particle| {
             if (particle.time_to_live < 0) continue;
             if (prev == null) {
@@ -152,12 +157,64 @@ pub fn drawTrail(self: *@This()) void {
         }
     }
 }
-
-const MouseTrailParticle = struct {
+const TrailParticle = struct {
     pos: rl.Vector2,
     size: f32,
     time_to_live: f32,
 };
+
+const DrawingParticle = struct {
+    pos: rl.Vector2,
+    size: f32,
+    velocity: rl.Vector2,
+    acceleration: rl.Vector2,
+    time_to_live: f32,
+};
+
+pub fn addDrawingParticle(self: *@This(), pos: rl.Vector2) void {
+    const zone = tracy.initZone(@src(), .{});
+    defer zone.deinit();
+
+    self.drawing_particles.add(.{
+        .pos = pos,
+        .velocity = .init(
+            (self.random.random().float(f32) - 0.5) * 100,
+            (self.random.random().float(f32) - 0.5) * 100,
+        ),
+        .acceleration = .init(
+            0,
+            0,
+        ),
+        .size = 3,
+        .time_to_live = 0.5,
+    });
+}
+
+pub fn updateDrawingParticle(self: *@This()) void {
+    const zone = tracy.initZone(@src(), .{});
+    defer zone.deinit();
+
+    inline for (self.drawing_particles.orderedSlices()) |slice| {
+        for (slice) |*particle| {
+            particle.time_to_live -= rl.getFrameTime();
+            particle.pos = particle.pos.add(particle.velocity.scale(@floatCast(rl.getFrameTime())));
+            particle.velocity = particle.velocity.add(particle.acceleration.scale(@floatCast(rl.getFrameTime())));
+            particle.time_to_live -= rl.getFrameTime();
+        }
+    }
+}
+
+pub fn drawDrawingParticles(self: *@This()) void {
+    const zone = tracy.initZone(@src(), .{});
+    defer zone.deinit();
+
+    inline for (self.drawing_particles.orderedSlices()) |slice| {
+        for (slice) |*particle| {
+            if (particle.time_to_live < 0) continue;
+            rl.drawCircleV(particle.pos, particle.size, .orange);
+        }
+    }
+}
 
 fn debugDrawHistory(history: History, pos: rl.Vector2) void {
     const font_size = 20;
@@ -231,8 +288,9 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
         .brush = .{
             .color = rl.Color.red,
         },
-        .old_mouse_position = rl.getMousePosition(),
+        .old_cursor_position = rl.getMousePosition(),
         .brush_state = .idle,
+        .random = std.Random.DefaultPrng.init(0),
     };
     drawer.canvas = Canvas.load(gpa) catch |e| canvas: {
         std.log.err("Can't load file {s}", .{@errorName(e)});
@@ -400,7 +458,7 @@ const Bar = struct {
         };
     }
 
-    pub fn draw(self: @This(), mouse_pos: rl.Vector2) f32 {
+    pub fn draw(self: @This(), cursor_pos: rl.Vector2) f32 {
         const bar_top = self.center.add(.init(0, self.scale / 2));
         const bar_bottom = self.center.subtract(.init(0, self.scale / 2));
         const bar_width = 10;
@@ -411,7 +469,7 @@ const Bar = struct {
             rl.Color.gray,
         );
         const bar_size = 10;
-        const bar_middle_pos = rl.Vector2.init(self.center.x, std.math.clamp(mouse_pos.y, bar_bottom.y, bar_top.y));
+        const bar_middle_pos = rl.Vector2.init(self.center.x, std.math.clamp(cursor_pos.y, bar_bottom.y, bar_top.y));
         const font_size = 30;
         const text_width = rl.measureText(self.text, font_size);
         rl.drawText(
@@ -444,15 +502,15 @@ pub fn tick(self: *Drawer) !void {
     tracy.plot(i64, "strokes size", @intCast(self.canvas.strokes.items.len));
     tracy.plot(i64, "segments size", @intCast(self.canvas.segments.items.len));
 
-    const mouse_position = rl.getMousePosition();
-    defer self.old_mouse_position = mouse_position;
+    const cursor_position = rl.getMousePosition();
+    defer self.old_cursor_position = cursor_position;
 
     // :global input
     if (isPressed(config.key_bindings.toggle_keybindings)) {
         self.showing_keybindings = !self.showing_keybindings;
     }
-    if (isPressed(config.key_bindings.enable_mouse_trail)) {
-        self.mouse_trail_enabled = !self.mouse_trail_enabled;
+    if (isPressed(config.key_bindings.enable_cursor_trail)) {
+        self.cursor_trail_enabled = !self.cursor_trail_enabled;
     }
     if (isPressed(config.key_bindings.save)) {
         try self.canvas.save(self.gpa);
@@ -501,7 +559,7 @@ pub fn tick(self: *Drawer) !void {
         } else if (isDown(config.key_bindings.eraser))
             .eraser
         else if (isPressed(config.key_bindings.picking_color)) state: {
-            self.color_wheel = .{ .center = mouse_position, .size = 0 };
+            self.color_wheel = .{ .center = cursor_position, .size = 0 };
             break :state .picking_color;
         } else .idle,
 
@@ -554,18 +612,18 @@ pub fn tick(self: *Drawer) !void {
                     );
                     while (iter.next()) |line| {
                         if (line.len == 0) continue;
-                        const line_intersects_mouse, const line_intersects_mouse_line = if (line.len > 1) blk: {
-                            const line_intersects_mouse = rl.checkCollisionCircleLine(rl.getMousePosition(), radius, line[0], line[1]);
+                        const line_intersects_cursor, const line_intersects_cursor_line = if (line.len > 1) blk: {
+                            const line_intersects_cursor = rl.checkCollisionCircleLine(rl.getMousePosition(), radius, line[0], line[1]);
                             var collision_point: rl.Vector2 = undefined;
-                            const line_intersects_mouse_line = rl.checkCollisionLines(rl.getMousePosition(), self.old_mouse_position, line[0], line[1], &collision_point);
-                            break :blk .{ line_intersects_mouse, line_intersects_mouse_line };
+                            const line_intersects_cursor_line = rl.checkCollisionLines(rl.getMousePosition(), self.old_cursor_position, line[0], line[1], &collision_point);
+                            break :blk .{ line_intersects_cursor, line_intersects_cursor_line };
                         } else blk: {
-                            const line_intersects_mouse = rl.checkCollisionPointCircle(line[0], rl.getMousePosition(), radius);
-                            const line_intersects_mouse_line = rl.checkCollisionPointLine(line[0], rl.getMousePosition(), self.old_mouse_position, config.eraser_thickness);
-                            break :blk .{ line_intersects_mouse, line_intersects_mouse_line };
+                            const line_intersects_cursor = rl.checkCollisionPointCircle(line[0], rl.getMousePosition(), radius);
+                            const line_intersects_cursor_line = rl.checkCollisionPointLine(line[0], rl.getMousePosition(), self.old_cursor_position, config.eraser_thickness);
+                            break :blk .{ line_intersects_cursor, line_intersects_cursor_line };
                         };
 
-                        if (line_intersects_mouse or line_intersects_mouse_line) {
+                        if (line_intersects_cursor or line_intersects_cursor_line) {
                             try self.canvas.history.addHistoryEntry(self.gpa, .{ .erased = index });
                             stroke.is_active = false;
                             break;
@@ -577,7 +635,7 @@ pub fn tick(self: *Drawer) !void {
             break :state if (isDown(config.key_bindings.eraser)) .eraser else .idle;
         },
         .picking_color => state: {
-            self.brush.color = self.color_wheel.draw(mouse_position);
+            self.brush.color = self.color_wheel.draw(cursor_position);
             break :state if (!isDown(config.key_bindings.picking_color))
                 .idle
             else {
@@ -600,28 +658,35 @@ pub fn tick(self: *Drawer) !void {
     // Shrink color picker
     if (self.brush_state != .picking_color) {
         self.color_wheel.size = expDecayWithAnimationSpeed(self.color_wheel.size, 0, rl.getFrameTime());
-        _ = self.color_wheel.draw(mouse_position);
+        _ = self.color_wheel.draw(cursor_position);
     }
     // Draw mouse
 
     if (self.brush_state == .eraser) {
-        rl.drawCircleLinesV(mouse_position, config.eraser_thickness / 2, self.brush.color);
+        rl.drawCircleLinesV(cursor_position, config.eraser_thickness / 2, self.brush.color);
     } else {
-        rl.drawCircleV(mouse_position, self.brush.radius * 2, self.brush.color);
+        rl.drawCircleV(cursor_position, self.brush.radius * 2, self.brush.color);
     }
 
     // Draw trail
     self.updateTrail();
-    if (self.mouse_trail_enabled) {
-        self.addTrailParticle(mouse_position);
+    if (self.cursor_trail_enabled) {
+        self.addTrailParticle(cursor_position);
         self.drawTrail();
     }
 
+    // Draw sparks
+    self.updateDrawingParticle();
+    if (self.drawing_particles_enabled)
+        if (self.brush_state == .drawing)
+            self.addDrawingParticle(cursor_position);
+    self.drawDrawingParticles();
+
     if (isDown(config.key_bindings.change_brightness)) {
         if (self.background_alpha_selector) |bar| {
-            self.background_color = self.background_color.alpha(bar.draw(mouse_position));
+            self.background_color = self.background_color.alpha(bar.draw(cursor_position));
         } else {
-            self.background_alpha_selector = Bar.new(mouse_position, self.background_color.normalize().w, .{ .text = "Background alpha" });
+            self.background_alpha_selector = Bar.new(cursor_position, self.background_color.normalize().w, .{ .text = "Background alpha" });
         }
     } else {
         if (self.background_alpha_selector) |_| {
