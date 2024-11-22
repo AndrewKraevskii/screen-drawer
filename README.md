@@ -19,5 +19,17 @@ It stores images in default location for apps to store data on your OS.
 - linux => ~/.local/share/screen-drawer/
 - windows => %LOCALAPPDATA%\\screen-drawer\\
 
+
+
 ## TODO
-- [ ] dashed line
+- [x] Vector image format
+- [ ] Better keybindings (with support for both drawing pad and mouse)
+- [ ] Add optional icons to show current drawing mode
+- [ ] Bring gallery back
+- [ ] Figure out file format versioning
+- [ ] Do some testing
+- [ ] Support of image importing using clipboard
+- [ ] Draw grid
+- [ ] Since it's now vector format do infinite canvas
+- [ ] Export canvases
+- [ ] Regular drawing board mode?

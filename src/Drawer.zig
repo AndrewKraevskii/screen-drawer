@@ -31,6 +31,7 @@ history: History = .{},
 old_mouse_position: rl.Vector2,
 
 showing_keybindings: bool = false,
+
 mouse_trail: OverrideQueue(MouseTrailParticle, 0x100) = .empty,
 mouse_trail_enabled: bool = false,
 background_color: rl.Color = .blank,
