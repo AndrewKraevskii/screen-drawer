@@ -39,22 +39,20 @@ background_alpha_selector: ?Bar = null,
 
 random: std.Random.DefaultPrng,
 
+save_directory: std.fs.Dir,
+
 const Canvas = struct {
     strokes: std.ArrayListUnmanaged(Stroke) = .{},
     segments: std.ArrayListUnmanaged(rl.Vector2) = .{},
     history: History = .{},
 
-    fn save(canvas: *Canvas, gpa: std.mem.Allocator) !void {
+    fn save(canvas: *Canvas, dir: std.fs.Dir) !void {
         const zone = tracy.initZone(@src(), .{});
         defer zone.deinit();
 
-        const dir_path = try getAppDataDirEnsurePathExist(gpa, save_folder_name);
-        defer gpa.free(dir_path);
-
-        var dir = try std.fs.openDirAbsolute(dir_path, .{});
-        defer dir.close();
-
+        const file_zone = tracy.initZone(@src(), .{ .name = "Open file" });
         var file = try dir.createFile(save_file_name, .{});
+        file_zone.deinit();
         defer file.close();
         var bw = std.io.bufferedWriter(file.writer());
         defer bw.flush() catch |e| {
@@ -71,26 +69,23 @@ const Canvas = struct {
         try writer.writeAll(std.mem.sliceAsBytes(canvas.history.events.items));
     }
 
-    fn load(gpa: std.mem.Allocator) !Canvas {
+    fn load(gpa: std.mem.Allocator, dir: std.fs.Dir) !Canvas {
         const zone = tracy.initZone(@src(), .{});
         defer zone.deinit();
 
-        const dir_path = try getAppDataDirEnsurePathExist(gpa, save_folder_name);
-        defer gpa.free(dir_path);
-
-        var canvas = Canvas{};
-
-        var dir = try std.fs.openDirAbsolute(dir_path, .{});
-        defer dir.close();
-
+        const file_zone = tracy.initZone(@src(), .{ .name = "Open file" });
         var file = try dir.openFile(save_file_name, .{});
+        file_zone.deinit();
         defer file.close();
+
         var br = std.io.bufferedReader(file.reader());
         const reader = br.reader();
 
         var buf: [3]u8 = undefined;
         try reader.readNoEof(&buf); // magic
         if (!std.mem.eql(u8, &buf, save_format_magic)) return error.MagicNotFound;
+
+        var canvas = Canvas{};
 
         inline for (.{ "segments", "strokes" }) |field| {
             const size = try reader.readInt(u64, .little);
@@ -122,7 +117,7 @@ const save_folder_name = "screen_drawer_vector";
 const save_file_name = "save.sdv";
 const save_format_magic = "sdv";
 
-pub fn addTrailParticle(self: *@This(), pos: rl.Vector2) void {
+fn addTrailParticle(self: *@This(), pos: rl.Vector2) void {
     const zone = tracy.initZone(@src(), .{});
     defer zone.deinit();
 
@@ -133,7 +128,7 @@ pub fn addTrailParticle(self: *@This(), pos: rl.Vector2) void {
     });
 }
 
-pub fn updateTrail(self: *@This()) void {
+fn updateTrail(self: *@This()) void {
     const zone = tracy.initZone(@src(), .{});
     defer zone.deinit();
 
@@ -145,7 +140,7 @@ pub fn updateTrail(self: *@This()) void {
     }
 }
 
-pub fn drawTrail(self: *@This()) void {
+fn drawTrail(self: *@This()) void {
     const zone = tracy.initZone(@src(), .{});
     defer zone.deinit();
 
@@ -163,6 +158,7 @@ pub fn drawTrail(self: *@This()) void {
         }
     }
 }
+
 const TrailParticle = struct {
     pos: rl.Vector2,
     size: f32,
@@ -177,7 +173,7 @@ const DrawingParticle = struct {
     time_to_live: f32,
 };
 
-pub fn addDrawingParticle(self: *@This(), pos: rl.Vector2) void {
+fn addDrawingParticle(self: *@This(), pos: rl.Vector2) void {
     const zone = tracy.initZone(@src(), .{});
     defer zone.deinit();
 
@@ -196,7 +192,7 @@ pub fn addDrawingParticle(self: *@This(), pos: rl.Vector2) void {
     });
 }
 
-pub fn updateDrawingParticle(self: *@This()) void {
+fn updateDrawingParticle(self: *@This()) void {
     const zone = tracy.initZone(@src(), .{});
     defer zone.deinit();
 
@@ -210,7 +206,7 @@ pub fn updateDrawingParticle(self: *@This()) void {
     }
 }
 
-pub fn drawDrawingParticles(self: *@This()) void {
+fn drawDrawingParticles(self: *@This()) void {
     const zone = tracy.initZone(@src(), .{});
     defer zone.deinit();
 
@@ -246,14 +242,14 @@ const EventTypes = union(enum) {
     drawn: usize,
     erased: usize,
 
-    pub fn redo(event: EventTypes, state: *Drawer) void {
+    fn redo(event: EventTypes, state: *Drawer) void {
         tracy.message("redo");
         switch (event) {
             .drawn => |index| state.canvas.strokes.items[index].is_active = true,
             .erased => |index| state.canvas.strokes.items[index].is_active = false,
         }
     }
-    pub fn undo(event: EventTypes, state: *Drawer) void {
+    fn undo(event: EventTypes, state: *Drawer) void {
         tracy.message("undo");
         switch (event) {
             .erased => |index| state.canvas.strokes.items[index].is_active = true,
@@ -288,6 +284,13 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
     rl.setTraceLogLevel(if (is_debug) .log_debug else .log_warning);
     rl.initWindow(0, 0, "Drawer");
     errdefer rl.closeWindow();
+
+    const dir_path = try getAppDataDirEnsurePathExist(gpa, save_folder_name);
+    defer gpa.free(dir_path);
+
+    var dir = try std.fs.openDirAbsolute(dir_path, .{});
+    errdefer dir.close();
+
     var drawer: Drawer = .{
         .gpa = gpa,
         .color_wheel = .{ .center = rl.Vector2.zero(), .size = 0 },
@@ -297,8 +300,9 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
         .old_cursor_position = rl.getMousePosition(),
         .brush_state = .idle,
         .random = std.Random.DefaultPrng.init(0),
+        .save_directory = dir,
     };
-    drawer.canvas = Canvas.load(gpa) catch |e| canvas: {
+    drawer.canvas = Canvas.load(gpa, dir) catch |e| canvas: {
         std.log.err("Can't load file {s}", .{@errorName(e)});
 
         break :canvas Canvas{};
@@ -414,9 +418,10 @@ fn drawKeybindingsHelp(arena: std.mem.Allocator, position: rl.Vector2) !void {
 }
 
 pub fn deinit(self: *Drawer) void {
-    self.canvas.save(self.gpa) catch |e| {
+    self.canvas.save(self.save_directory) catch |e| {
         std.log.err("Failed to save: {s}", .{@errorName(e)});
     };
+    self.save_directory.close();
     self.canvas.strokes.deinit(self.gpa);
     self.canvas.history.deinit(self.gpa);
     self.canvas.segments.deinit(self.gpa);
@@ -448,7 +453,7 @@ const Bar = struct {
         color: rl.Color = .gray,
     };
 
-    pub fn new(pos: rl.Vector2, value: f32, bar_config: Config) @This() {
+    fn new(pos: rl.Vector2, value: f32, bar_config: Config) @This() {
         const top_y = pos.y - bar_config.scale / 2;
         const persantage = (value - bar_config.min) / (bar_config.max - bar_config.min);
         return .{
@@ -464,7 +469,7 @@ const Bar = struct {
         };
     }
 
-    pub fn draw(self: @This(), cursor_pos: rl.Vector2) f32 {
+    fn draw(self: @This(), cursor_pos: rl.Vector2) f32 {
         const bar_top = self.center.add(.init(0, self.scale / 2));
         const bar_bottom = self.center.subtract(.init(0, self.scale / 2));
         const bar_width = 10;
@@ -497,7 +502,7 @@ const Bar = struct {
     }
 };
 
-pub fn tick(self: *Drawer) !void {
+fn tick(self: *Drawer) !void {
     var arena = std.heap.ArenaAllocator.init(self.gpa);
     defer arena.deinit();
 
@@ -519,7 +524,7 @@ pub fn tick(self: *Drawer) !void {
         self.cursor_trail_enabled = !self.cursor_trail_enabled;
     }
     if (isPressed(config.key_bindings.save)) {
-        try self.canvas.save(self.gpa);
+        try self.canvas.save(self.save_directory);
         std.log.info("Saved image", .{});
     }
 
@@ -759,7 +764,7 @@ const ColorWheel = struct {
     center: rl.Vector2,
     size: f32,
 
-    pub fn draw(wheel: ColorWheel, pos: rl.Vector2) rl.Color {
+    fn draw(wheel: ColorWheel, pos: rl.Vector2) rl.Color {
         if (wheel.size < 0.01) return rl.Color.blank;
         const segments = 360;
         for (0..segments) |num| {
