@@ -7,11 +7,11 @@ const Canvas = @import("Canvas.zig");
 const is_debug = @import("main.zig").is_debug;
 const main = @import("main.zig");
 const config = main.config;
+const Vec2 = main.Vector2;
 const OverrideQueue = @import("override_queue.zig").OverrideQueue;
 const Rectangle = @import("Rectangle.zig");
 
 const Drawer = @This();
-
 gpa: std.mem.Allocator,
 
 brush_state: union(enum) {
@@ -28,8 +28,8 @@ brush: struct {
 },
 
 canvas: Canvas = .{},
-old_world_position: rl.Vector2,
-old_cursor_position: rl.Vector2,
+old_world_position: Vec2,
+old_cursor_position: Vec2,
 
 showing_keybindings: bool = false,
 
@@ -56,7 +56,7 @@ fn getAppDataDirEnsurePathExist(alloc: std.mem.Allocator, appname: []const u8) !
     return data_dir_path;
 }
 
-fn addTrailParticle(self: *@This(), pos: rl.Vector2) void {
+fn addTrailParticle(self: *@This(), pos: Vec2) void {
     const zone = tracy.initZone(@src(), .{});
     defer zone.deinit();
 
@@ -93,39 +93,39 @@ fn drawTrail(self: *@This()) void {
                 continue;
             }
             defer prev = particle.*;
-            rl.drawLineEx(particle.pos, prev.?.pos, particle.size * 2, self.brush.color);
+            rl.drawLineEx(@bitCast(particle.pos), @bitCast(prev.?.pos), particle.size * 2, self.brush.color);
         }
     }
 }
 
 const TrailParticle = struct {
-    pos: rl.Vector2,
+    pos: Vec2,
     size: f32,
     time_to_live: f32,
 };
 
 const DrawingParticle = struct {
-    pos: rl.Vector2,
+    pos: Vec2,
     size: f32,
-    velocity: rl.Vector2,
-    acceleration: rl.Vector2,
+    velocity: Vec2,
+    acceleration: Vec2,
     time_to_live: f32,
 };
 
-fn addDrawingParticle(self: *@This(), pos: rl.Vector2) void {
+fn addDrawingParticle(self: *@This(), pos: Vec2) void {
     const zone = tracy.initZone(@src(), .{});
     defer zone.deinit();
 
     self.drawing_particles.add(.{
         .pos = pos,
-        .velocity = .init(
+        .velocity = .{
             (self.random.random().float(f32) - 0.5) * 100,
             (self.random.random().float(f32) - 0.5) * 100,
-        ),
-        .acceleration = .init(
+        },
+        .acceleration = .{
             0,
             0,
-        ),
+        },
         .size = 3,
         .time_to_live = 0.5,
     });
@@ -138,8 +138,8 @@ fn updateDrawingParticle(self: *@This()) void {
     inline for (self.drawing_particles.orderedSlices()) |slice| {
         for (slice) |*particle| {
             particle.time_to_live -= rl.getFrameTime();
-            particle.pos = particle.pos.add(particle.velocity.scale(@floatCast(rl.getFrameTime())));
-            particle.velocity = particle.velocity.add(particle.acceleration.scale(@floatCast(rl.getFrameTime())));
+            particle.pos = particle.pos + particle.velocity * @as(Vec2, @splat(@floatCast(rl.getFrameTime())));
+            particle.velocity = particle.velocity + particle.acceleration * @as(Vec2, @splat(@floatCast(rl.getFrameTime())));
             particle.time_to_live -= rl.getFrameTime();
         }
     }
@@ -152,12 +152,12 @@ fn drawDrawingParticles(self: *@This()) void {
     inline for (self.drawing_particles.orderedSlices()) |slice| {
         for (slice) |*particle| {
             if (particle.time_to_live < 0) continue;
-            rl.drawCircleV(particle.pos, particle.size, .orange);
+            rl.drawCircleV(@bitCast(particle.pos), @bitCast(particle.size), .orange);
         }
     }
 }
 
-fn debugDrawHistory(history: Canvas.History, pos: rl.Vector2) void {
+fn debugDrawHistory(history: Canvas.History, pos: Vec2) void {
     const font_size = 20;
     const y_spacing = 10;
     for (history.events.items, 0..) |entry, index| {
@@ -168,10 +168,7 @@ fn debugDrawHistory(history: Canvas.History, pos: rl.Vector2) void {
             .drawn => |i| .{ std.fmt.bufPrintZ(&buffer, "drawn1 {d}", .{i}) catch unreachable, rl.Color.green.alpha(alpha) },
             .erased => |i| .{ std.fmt.bufPrintZ(&buffer, "erased {d}", .{i}) catch unreachable, rl.Color.red.alpha(alpha) },
         };
-        rl.drawTextEx(rl.getFontDefault(), text, pos.add(.{
-            .x = 0,
-            .y = y_offset,
-        }), font_size, 2, color);
+        rl.drawTextEx(rl.getFontDefault(), text, @bitCast(pos + Vec2{ 0, y_offset }), font_size, 2, color);
     }
 }
 
@@ -198,19 +195,19 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
     errdefer dir.close();
     const camera: rl.Camera2D = .{
         .zoom = 1,
-        .target = rl.Vector2.one().scale(100),
+        .target = @bitCast(@as(Vec2, @splat(100))),
         .offset = .zero(),
         .rotation = 0,
     };
     var drawer: Drawer = .{
         .camera = camera,
         .gpa = gpa,
-        .color_wheel = .{ .center = rl.Vector2.zero(), .size = 0 },
+        .color_wheel = .{ .center = @splat(0), .size = 0 },
         .brush = .{
             .color = rl.Color.red,
         },
-        .old_world_position = rl.getScreenToWorld2D(rl.getMousePosition(), camera),
-        .old_cursor_position = rl.getMousePosition(),
+        .old_world_position = @bitCast(rl.getScreenToWorld2D(rl.getMousePosition(), camera)),
+        .old_cursor_position = @bitCast(rl.getMousePosition()),
         .brush_state = .idle,
         .random = std.Random.DefaultPrng.init(0),
         .save_directory = dir,
@@ -244,7 +241,7 @@ pub fn deinit(self: *Drawer) void {
     rl.closeWindow();
 }
 
-fn drawKeybindingsHelp(arena: std.mem.Allocator, position: rl.Vector2) !void {
+fn drawKeybindingsHelp(arena: std.mem.Allocator, position: Vec2) !void {
     const zone = tracy.initZone(@src(), .{ .name = "drawKeybindingsHelp" });
     defer zone.deinit();
 
@@ -262,16 +259,16 @@ fn drawKeybindingsHelp(arena: std.mem.Allocator, position: rl.Vector2) !void {
         spacing: f32,
         font_size: f32,
 
-        fn measureText(self: @This(), text: [:0]const u8) rl.Vector2 {
+        fn measureText(self: @This(), text: [:0]const u8) Vec2 {
             const measurer_zone = tracy.initZone(@src(), .{ .name = "measure text" });
             defer measurer_zone.deinit();
 
-            return rl.measureTextEx(
+            return @bitCast(rl.measureTextEx(
                 self.font,
                 text,
                 self.font_size,
                 self.spacing,
-            );
+            ));
         }
     } = .{ .font = rl.getFontDefault(), .spacing = spacing, .font_size = font_size };
 
@@ -291,16 +288,16 @@ fn drawKeybindingsHelp(arena: std.mem.Allocator, position: rl.Vector2) !void {
                 }
                 try string_builder.append(0);
                 const width_right = measurer.measureText(@ptrCast(string_builder.items));
-                max_width_right = @max(width_right.x, max_width_right);
+                max_width_right = @max(width_right[0], max_width_right);
             }
 
-            const width_left = measurer.measureText(key_binding.name).x;
+            const width_left = measurer.measureText(key_binding.name)[0];
             max_width_left = @max(width_left, max_width_left);
         }
         break :max_width .{ max_width_left, max_width_right };
     };
 
-    const drawing_rect = Rectangle.init(starting_position.x, starting_position.y, max_width_left + max_width_right, help_window_height);
+    const drawing_rect = Rectangle.init(starting_position[0], starting_position[1], max_width_left + max_width_right, help_window_height);
 
     rl.drawRectangleRec(
         drawing_rect.padRectangle(.{ .x = 10, .y = 10 }).toRay(),
@@ -311,16 +308,13 @@ fn drawKeybindingsHelp(arena: std.mem.Allocator, position: rl.Vector2) !void {
         const name = key_binding.name;
 
         const y_offset: f32 = (font_size + y_spacing) * @as(f32, @floatFromInt(index));
-        const pos = starting_position.add(.{
-            .x = 0,
-            .y = y_offset,
-        });
+        const pos = starting_position + Vec2{ 0, y_offset };
 
         {
             rl.drawTextEx(
                 rl.getFontDefault(),
                 name,
-                pos,
+                @bitCast(pos),
                 font_size,
                 spacing,
                 rl.Color.green,
@@ -341,7 +335,7 @@ fn drawKeybindingsHelp(arena: std.mem.Allocator, position: rl.Vector2) !void {
             rl.drawTextEx(
                 rl.getFontDefault(),
                 @ptrCast(string_builder.items.ptr),
-                pos.add(.{ .x = max_width_left, .y = 0 }),
+                @bitCast(pos + Vec2{ max_width_left, 0 }),
                 font_size,
                 spacing,
                 rl.Color.red,
@@ -382,8 +376,8 @@ fn tick(self: *Drawer) !void {
     tracy.plot(i64, "strokes size", @intCast(self.canvas.strokes.items.len));
     tracy.plot(i64, "segments size", @intCast(self.canvas.segments.items.len));
 
-    const cursor_position = rl.getMousePosition();
-    const world_position = rl.getScreenToWorld2D(rl.getMousePosition(), self.camera);
+    const cursor_position: Vec2 = @bitCast(rl.getMousePosition());
+    const world_position: Vec2 = @bitCast(rl.getScreenToWorld2D(rl.getMousePosition(), self.camera));
     defer self.old_world_position = world_position;
     defer self.old_cursor_position = cursor_position;
 
@@ -420,13 +414,13 @@ fn tick(self: *Drawer) !void {
             if (stroke.is_active) {
                 if (stroke.span.size < 2) continue;
                 var iter = std.mem.window(
-                    rl.Vector2,
+                    [2]f32,
                     self.canvas.segments.items[stroke.span.start..][0..stroke.span.size],
                     2,
                     1,
                 );
                 while (iter.next()) |line| {
-                    rl.drawLineEx(line[0], line[1], self.brush.radius, stroke.color);
+                    rl.drawLineEx(@bitCast(line[0]), @bitCast(line[1]), self.brush.radius, stroke.color);
                 }
             }
         }
@@ -445,7 +439,7 @@ fn tick(self: *Drawer) !void {
         .drawing => state: {
             try self.canvas.addStrokePoint(
                 self.gpa,
-                world_position,
+                @bitCast(world_position),
             );
             break :state if (isDown(config.key_bindings.draw))
                 .drawing
@@ -475,8 +469,8 @@ fn tick(self: *Drawer) !void {
 
     if (is_debug)
         debugDrawHistory(self.canvas.history, .{
-            .x = 20,
-            .y = 10,
+            20,
+            10,
         });
 
     // Shrink color picker
@@ -487,15 +481,15 @@ fn tick(self: *Drawer) !void {
 
     // Draw mouse
     if (self.brush_state == .eraser) {
-        rl.drawCircleLinesV(cursor_position, config.eraser_thickness / 2, self.brush.color);
+        rl.drawCircleLinesV(@bitCast(cursor_position), config.eraser_thickness / 2, self.brush.color);
     } else {
-        rl.drawCircleV(cursor_position, self.brush.radius * 2, self.brush.color);
+        rl.drawCircleV(@bitCast(cursor_position), self.brush.radius * 2, self.brush.color);
     }
 
     // Draw trail
     self.updateTrail();
     if (self.cursor_trail_enabled) {
-        self.addTrailParticle(cursor_position);
+        self.addTrailParticle(@bitCast(cursor_position));
         self.drawTrail();
     }
 
@@ -503,7 +497,7 @@ fn tick(self: *Drawer) !void {
     self.updateDrawingParticle();
     if (self.drawing_particles_enabled)
         if (self.brush_state == .drawing)
-            self.addDrawingParticle(cursor_position);
+            self.addDrawingParticle(@bitCast(cursor_position));
     self.drawDrawingParticles();
 
     if (isDown(config.key_bindings.change_brightness)) {
@@ -519,7 +513,7 @@ fn tick(self: *Drawer) !void {
     }
 
     if (self.showing_keybindings) {
-        try drawKeybindingsHelp(arena.allocator(), .init(100, 100));
+        try drawKeybindingsHelp(arena.allocator(), .{ 100, 100 });
     }
     if (@import("builtin").mode == .Debug)
         rl.drawFPS(0, 0);
@@ -590,10 +584,10 @@ fn isModifierKey(key: rl.KeyboardKey) bool {
 }
 
 const ColorWheel = struct {
-    center: rl.Vector2,
+    center: Vec2,
     size: f32,
 
-    fn draw(wheel: ColorWheel, pos: rl.Vector2) rl.Color {
+    fn draw(wheel: ColorWheel, pos: Vec2) rl.Color {
         if (wheel.size < 0.01) return rl.Color.blank;
         const segments = 360;
         for (0..segments) |num| {
@@ -602,7 +596,7 @@ const ColorWheel = struct {
 
             const hue = frac * 360;
             rl.drawCircleSector(
-                wheel.center,
+                @bitCast(wheel.center),
                 wheel.size,
                 angle,
                 angle + 360.0 / @as(comptime_float, segments),
@@ -610,18 +604,26 @@ const ColorWheel = struct {
                 rl.Color.fromHSV(hue, 0.8, 0.8),
             );
         }
-        const distance = @min(wheel.center.distance(pos) / wheel.size, 1);
-        return rl.Color.fromHSV(-wheel.center.lineAngle(pos) / std.math.tau * 360, distance, 1);
+        const distance = @min(@sqrt(@reduce(.Add, (wheel.center - pos) * (wheel.center - pos))) / wheel.size, 1);
+        const direction = pos - wheel.center;
+        const angle = std.math.atan2(direction[0], direction[1]);
+        return rl.Color.fromHSV(angle / std.math.tau * 360, distance, 1);
     }
 };
 
 const Bar = struct {
-    center: rl.Vector2,
+    orientation: Orientation,
+    center: Vec2,
     min: f32,
     max: f32,
     scale: f32,
     text: [:0]const u8,
     color: rl.Color,
+
+    const Orientation = enum {
+        vertical,
+        horisontal,
+    };
 
     const Config = struct {
         min: f32 = 0,
@@ -629,16 +631,18 @@ const Bar = struct {
         scale: f32 = 200,
         text: [:0]const u8 = "Some ui bar",
         color: rl.Color = .gray,
+        orientation: Orientation = .vertical,
     };
 
-    fn init(pos: rl.Vector2, value: f32, bar_config: Config) @This() {
-        const top_y = pos.y - bar_config.scale / 2;
+    fn init(pos: Vec2, value: f32, bar_config: Config) @This() {
+        const top_y = pos[1] - bar_config.scale / 2;
         const persantage = (value - bar_config.min) / (bar_config.max - bar_config.min);
         return .{
-            .center = .init(
-                pos.x - 50,
+            .orientation = bar_config.orientation,
+            .center = .{
+                pos[0] - 50,
                 persantage * bar_config.scale + top_y,
-            ),
+            },
             .min = bar_config.min,
             .max = bar_config.max,
             .scale = bar_config.scale,
@@ -647,35 +651,60 @@ const Bar = struct {
         };
     }
 
-    fn draw(self: @This(), cursor_pos: rl.Vector2) f32 {
-        const bar_top = self.center.add(.init(0, self.scale / 2));
-        const bar_bottom = self.center.subtract(.init(0, self.scale / 2));
+    fn draw(self: @This(), cursor_pos: Vec2) f32 {
+        const dir_vec: Vec2 = if (self.orientation == .vertical)
+            .{ 0, self.scale / 2 }
+        else
+            .{ self.scale / 2, 0 };
+
+        const bar_start = self.center + dir_vec;
+        const bar_end = self.center - dir_vec;
         const bar_width = 10;
         rl.drawLineEx(
-            bar_top,
-            bar_bottom,
+            @bitCast(bar_start),
+            @bitCast(bar_end),
             bar_width,
             rl.Color.gray,
         );
         const bar_size = 10;
-        const bar_middle_pos = rl.Vector2.init(self.center.x, std.math.clamp(cursor_pos.y, bar_bottom.y, bar_top.y));
+        const clamped = std.math.clamp(cursor_pos, bar_end, bar_start);
+        const bar_middle_pos: Vec2 = if (self.orientation == .vertical)
+            .{ self.center[0], clamped[1] }
+        else
+            .{ clamped[0], self.center[1] };
+
         const font_size = 30;
         const text_width = rl.measureText(self.text, font_size);
-        rl.drawText(
-            self.text,
-            @as(i32, @intFromFloat(self.center.x)) - text_width - bar_width,
-            @as(i32, @intFromFloat(self.center.y)) - font_size / 2,
-            font_size,
-            .white,
-        );
+        const bar_vec: Vec2 = if (self.orientation == .vertical) .{ 0, bar_size / 2 } else .{ bar_size / 2, 0 };
+        if (self.orientation == .vertical)
+            rl.drawText(
+                self.text,
+                @as(i32, @intFromFloat(self.center[0])) - text_width - bar_width,
+                @as(i32, @intFromFloat(self.center[1])) - font_size / 2,
+                font_size,
+                .white,
+            )
+        else
+            rl.drawText(
+                self.text,
+                @as(i32, @intFromFloat(self.center[0])) - @divFloor(text_width, 2),
+                @as(i32, @intFromFloat(self.center[1])) - font_size - bar_width,
+                font_size,
+                .white,
+            );
         rl.drawLineEx(
-            bar_middle_pos.add(.init(0, bar_size / 2)),
-            bar_middle_pos.subtract(.init(0, bar_size / 2)),
+            @bitCast(bar_middle_pos + bar_vec),
+            @bitCast(bar_middle_pos - bar_vec),
             bar_width,
-            rl.Color.black,
+            .red,
         );
 
-        const selected_value = (bar_top.y - bar_middle_pos.y) / self.scale;
+        const scaled = (bar_start - bar_middle_pos) / @as(Vec2, @splat(self.scale));
+        const selected_value = if (self.orientation == .vertical)
+            scaled[1]
+        else
+            scaled[0];
+
         return selected_value * (self.max - self.min) + self.min;
     }
 };

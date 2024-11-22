@@ -8,6 +8,7 @@ const tracy = @import("tracy");
 const HistoryStorage = @import("history.zig").History;
 const main = @import("main.zig");
 const config = main.config;
+const Vector2 = main.Vector2;
 
 const Canvas = @This();
 
@@ -45,7 +46,7 @@ const Span = struct {
 };
 
 strokes: std.ArrayListUnmanaged(Stroke) = .{},
-segments: std.ArrayListUnmanaged(rl.Vector2) = .{},
+segments: std.ArrayListUnmanaged([2]f32) = .{},
 history: History = .{},
 
 pub fn startStroke(
@@ -61,16 +62,16 @@ pub fn startStroke(
     }, .color = color });
 }
 
-pub fn addStrokePoint(canvas: *@This(), gpa: std.mem.Allocator, pos: rl.Vector2) error{OutOfMemory}!void {
+pub fn addStrokePoint(canvas: *@This(), gpa: std.mem.Allocator, pos: [2]f32) error{OutOfMemory}!void {
     std.debug.assert(canvas.strokes.items.len != 0);
     // if previous segment is to small update it instead of adding new.
     const min_distance = 10;
     const min_distance_squared = min_distance * min_distance;
     if (canvas.strokes.items[canvas.strokes.items.len - 1].span.size >= 1 and canvas.segments.items.len >= 2) {
-        const start = canvas.segments.items[canvas.segments.items.len - 2];
-        const end = &canvas.segments.items[canvas.segments.items.len - 1];
-        if (start.distanceSqr(end.*) < min_distance_squared) {
-            end.* = pos;
+        const start: Vector2 = canvas.segments.items[canvas.segments.items.len - 2];
+        const end: Vector2 = canvas.segments.items[canvas.segments.items.len - 1];
+        if (@reduce(.Add, (start - end) * (start - end)) < min_distance_squared) {
+            canvas.segments.items[canvas.segments.items.len - 1] = pos;
             return;
         }
     }
@@ -84,11 +85,11 @@ pub fn addStrokePoint(canvas: *@This(), gpa: std.mem.Allocator, pos: rl.Vector2)
     );
 }
 
-pub fn erase(canvas: *@This(), gpa: std.mem.Allocator, start: rl.Vector2, end: rl.Vector2, radius: f32) error{OutOfMemory}!void {
+pub fn erase(canvas: *@This(), gpa: std.mem.Allocator, start: Vector2, end: Vector2, radius: f32) error{OutOfMemory}!void {
     for (canvas.strokes.items, 0..) |*stroke, index| {
         if (stroke.is_active) {
             var iter = std.mem.window(
-                rl.Vector2,
+                [2]f32,
                 canvas.segments.items[stroke.span.start..][0..stroke.span.size],
                 2,
                 1,
@@ -96,13 +97,13 @@ pub fn erase(canvas: *@This(), gpa: std.mem.Allocator, start: rl.Vector2, end: r
             while (iter.next()) |line| {
                 if (line.len == 0) continue;
                 const line_intersects_cursor, const line_intersects_cursor_line = if (line.len > 1) blk: {
-                    const line_intersects_cursor = rl.checkCollisionCircleLine(end, radius, line[0], line[1]);
+                    const line_intersects_cursor = rl.checkCollisionCircleLine(@bitCast(end), radius, @bitCast(line[0]), @bitCast(line[1]));
                     var collision_point: rl.Vector2 = undefined;
-                    const line_intersects_cursor_line = rl.checkCollisionLines(end, start, line[0], line[1], &collision_point);
+                    const line_intersects_cursor_line = rl.checkCollisionLines(@bitCast(end), @bitCast(start), @bitCast(line[0]), @bitCast(line[1]), &collision_point);
                     break :blk .{ line_intersects_cursor, line_intersects_cursor_line };
                 } else blk: {
-                    const line_intersects_cursor = rl.checkCollisionPointCircle(line[0], end, radius);
-                    const line_intersects_cursor_line = rl.checkCollisionPointLine(line[0], end, start, config.eraser_thickness);
+                    const line_intersects_cursor = rl.checkCollisionPointCircle(@bitCast(line[0]), @bitCast(end), radius);
+                    const line_intersects_cursor_line = rl.checkCollisionPointLine(@bitCast(line[0]), @bitCast(end), @bitCast(start), config.eraser_thickness);
                     break :blk .{ line_intersects_cursor, line_intersects_cursor_line };
                 };
 

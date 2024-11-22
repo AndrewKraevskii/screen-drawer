@@ -4,6 +4,7 @@ const rl = @import("raylib");
 const tracy = @import("tracy");
 
 const Drawer = @import("Drawer.zig");
+pub const Vector2 = @Vector(2, f32);
 
 pub const config = struct {
     pub const app_name = "screen-drawer";
