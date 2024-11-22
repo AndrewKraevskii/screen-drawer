@@ -28,6 +28,7 @@ brush: struct {
 },
 
 canvas: Canvas = .{},
+old_world_position: rl.Vector2,
 old_cursor_position: rl.Vector2,
 
 showing_keybindings: bool = false,
@@ -41,6 +42,7 @@ background_color: rl.Color = .blank,
 background_alpha_selector: ?Bar = null,
 
 random: std.Random.DefaultPrng,
+camera: rl.Camera2D,
 
 save_directory: std.fs.Dir,
 
@@ -194,13 +196,20 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
 
     var dir = try std.fs.openDirAbsolute(dir_path, .{});
     errdefer dir.close();
-
+    const camera: rl.Camera2D = .{
+        .zoom = 1,
+        .target = rl.Vector2.one().scale(100),
+        .offset = .zero(),
+        .rotation = 0,
+    };
     var drawer: Drawer = .{
+        .camera = camera,
         .gpa = gpa,
         .color_wheel = .{ .center = rl.Vector2.zero(), .size = 0 },
         .brush = .{
             .color = rl.Color.red,
         },
+        .old_world_position = rl.getScreenToWorld2D(rl.getMousePosition(), camera),
         .old_cursor_position = rl.getMousePosition(),
         .brush_state = .idle,
         .random = std.Random.DefaultPrng.init(0),
@@ -374,6 +383,8 @@ fn tick(self: *Drawer) !void {
     tracy.plot(i64, "segments size", @intCast(self.canvas.segments.items.len));
 
     const cursor_position = rl.getMousePosition();
+    const world_position = rl.getScreenToWorld2D(rl.getMousePosition(), self.camera);
+    defer self.old_world_position = world_position;
     defer self.old_cursor_position = cursor_position;
 
     // :global input
@@ -391,6 +402,9 @@ fn tick(self: *Drawer) !void {
     {
         const zone = tracy.initZone(@src(), .{ .name = "Line drawing" });
         defer zone.deinit();
+
+        self.camera.begin();
+        defer self.camera.end();
 
         for (self.canvas.strokes.items) |stroke| {
             if (stroke.is_active) {
@@ -417,7 +431,6 @@ fn tick(self: *Drawer) !void {
             redo_event.redo(&self.canvas);
         }
     }
-
     self.brush_state = switch (self.brush_state) {
         .idle => if (isDown(config.key_bindings.draw)) state: {
             try self.canvas.startStroke(self.gpa, self.brush.color);
@@ -430,7 +443,10 @@ fn tick(self: *Drawer) !void {
         } else .idle,
 
         .drawing => state: {
-            try self.canvas.addStrokePoint(self.gpa, rl.getMousePosition());
+            try self.canvas.addStrokePoint(
+                self.gpa,
+                world_position,
+            );
             break :state if (isDown(config.key_bindings.draw))
                 .drawing
             else
@@ -438,7 +454,7 @@ fn tick(self: *Drawer) !void {
         },
         .eraser => state: {
             const radius = config.eraser_thickness / 2;
-            try self.canvas.erase(self.gpa, self.old_cursor_position, rl.getMousePosition(), radius);
+            try self.canvas.erase(self.gpa, self.old_world_position, world_position, radius);
 
             break :state if (isDown(config.key_bindings.eraser)) .eraser else .idle;
         },
