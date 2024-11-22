@@ -206,11 +206,22 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
         .random = std.Random.DefaultPrng.init(0),
         .save_directory = dir,
     };
-    drawer.canvas = Canvas.load(gpa, dir) catch |e| canvas: {
-        std.log.err("Can't load file {s}", .{@errorName(e)});
 
-        break :canvas Canvas{};
-    };
+    { // load canvas
+        const file_zone = tracy.initZone(@src(), .{ .name = "Open file" });
+        var file = try dir.openFile(config.save_file_name, .{});
+        file_zone.deinit();
+        defer file.close();
+
+        var br = std.io.bufferedReader(file.reader());
+        const reader = br.reader();
+
+        drawer.canvas = Canvas.load(gpa, reader) catch |e| canvas: {
+            std.log.err("Can't load file {s}", .{@errorName(e)});
+
+            break :canvas Canvas{};
+        };
+    }
 
     return drawer;
 }
@@ -322,13 +333,11 @@ fn drawKeybindingsHelp(arena: std.mem.Allocator, position: rl.Vector2) !void {
 }
 
 pub fn deinit(self: *Drawer) void {
-    self.canvas.save(self.save_directory) catch |e| {
+    self.save() catch |e| {
         std.log.err("Failed to save: {s}", .{@errorName(e)});
     };
     self.save_directory.close();
-    self.canvas.strokes.deinit(self.gpa);
-    self.canvas.history.deinit(self.gpa);
-    self.canvas.segments.deinit(self.gpa);
+    self.canvas.deinit(self.gpa);
     rl.closeWindow();
 }
 
@@ -406,6 +415,18 @@ const Bar = struct {
     }
 };
 
+fn save(self: *@This()) !void {
+    var file = try self.save_directory.createFile(config.save_file_name, .{});
+    defer file.close();
+    var bw = std.io.bufferedWriter(file.writer());
+    defer bw.flush() catch |e| {
+        std.log.err("Failed to save: {s}", .{@errorName(e)});
+    };
+    const writer = bw.writer();
+
+    try self.canvas.save(writer);
+}
+
 fn tick(self: *Drawer) !void {
     var arena = std.heap.ArenaAllocator.init(self.gpa);
     defer arena.deinit();
@@ -428,7 +449,7 @@ fn tick(self: *Drawer) !void {
         self.cursor_trail_enabled = !self.cursor_trail_enabled;
     }
     if (isPressed(config.key_bindings.save)) {
-        try self.canvas.save(self.save_directory);
+        try self.save();
         std.log.info("Saved image", .{});
     }
 

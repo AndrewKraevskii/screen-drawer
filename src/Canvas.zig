@@ -48,29 +48,6 @@ strokes: std.ArrayListUnmanaged(Stroke) = .{},
 segments: std.ArrayListUnmanaged(rl.Vector2) = .{},
 history: History = .{},
 
-pub fn save(canvas: *Canvas, dir: std.fs.Dir) !void {
-    const zone = tracy.initZone(@src(), .{});
-    defer zone.deinit();
-
-    const file_zone = tracy.initZone(@src(), .{ .name = "Open file" });
-    var file = try dir.createFile(config.save_file_name, .{});
-    file_zone.deinit();
-    defer file.close();
-    var bw = std.io.bufferedWriter(file.writer());
-    defer bw.flush() catch |e| {
-        std.log.err("Failed to save: {s}", .{@errorName(e)});
-    };
-    const writer = bw.writer();
-
-    try writer.writeAll(config.save_format_magic); // magic
-    inline for (.{ "segments", "strokes" }) |field| {
-        try writer.writeInt(u64, @field(canvas, field).items.len, .little);
-        try writer.writeAll(std.mem.sliceAsBytes(@field(canvas, field).items));
-    }
-    try writer.writeInt(u64, canvas.history.events.items.len, .little);
-    try writer.writeAll(std.mem.sliceAsBytes(canvas.history.events.items));
-}
-
 pub fn startStroke(
     canvas: *@This(),
     gpa: std.mem.Allocator,
@@ -86,27 +63,25 @@ pub fn startStroke(
 
 pub fn addStrokePoint(canvas: *@This(), gpa: std.mem.Allocator, pos: rl.Vector2) error{OutOfMemory}!void {
     std.debug.assert(canvas.strokes.items.len != 0);
-    stroke_add_block: {
-        // if previous segment is to small update it instead of adding new.
-        const min_distance = 10;
-        const min_distance_squared = min_distance * min_distance;
-        if (canvas.strokes.items[canvas.strokes.items.len - 1].span.size >= 1) {
-            const start = canvas.segments.items[canvas.segments.items.len - 2];
-            const end = &canvas.segments.items[canvas.segments.items.len - 1];
-            if (start.distanceSqr(end.*) < min_distance_squared) {
-                end.* = pos;
-                break :stroke_add_block;
-            }
+    // if previous segment is to small update it instead of adding new.
+    const min_distance = 10;
+    const min_distance_squared = min_distance * min_distance;
+    if (canvas.strokes.items[canvas.strokes.items.len - 1].span.size >= 1 and canvas.segments.items.len >= 2) {
+        const start = canvas.segments.items[canvas.segments.items.len - 2];
+        const end = &canvas.segments.items[canvas.segments.items.len - 1];
+        if (start.distanceSqr(end.*) < min_distance_squared) {
+            end.* = pos;
+            return;
         }
-
-        // add new stroke point
-        canvas.strokes.items[canvas.strokes.items.len - 1].span.size += 1;
-
-        try canvas.segments.append(
-            gpa,
-            pos,
-        );
     }
+
+    // add new stroke point
+    canvas.strokes.items[canvas.strokes.items.len - 1].span.size += 1;
+
+    try canvas.segments.append(
+        gpa,
+        pos,
+    );
 }
 
 pub fn erase(canvas: *@This(), gpa: std.mem.Allocator, start: rl.Vector2, end: rl.Vector2, radius: f32) error{OutOfMemory}!void {
@@ -141,18 +116,20 @@ pub fn erase(canvas: *@This(), gpa: std.mem.Allocator, start: rl.Vector2, end: r
     }
 }
 
-pub fn load(gpa: std.mem.Allocator, dir: std.fs.Dir) !Canvas {
+pub fn save(canvas: *Canvas, writer: anytype) !void {
     const zone = tracy.initZone(@src(), .{});
     defer zone.deinit();
 
-    const file_zone = tracy.initZone(@src(), .{ .name = "Open file" });
-    var file = try dir.openFile(config.save_file_name, .{});
-    file_zone.deinit();
-    defer file.close();
+    try writer.writeAll(config.save_format_magic); // magic
+    inline for (.{ "segments", "strokes" }) |field| {
+        try writer.writeInt(u64, @field(canvas, field).items.len, .little);
+        try writer.writeAll(std.mem.sliceAsBytes(@field(canvas, field).items));
+    }
+    try writer.writeInt(u64, canvas.history.events.items.len, .little);
+    try writer.writeAll(std.mem.sliceAsBytes(canvas.history.events.items));
+}
 
-    var br = std.io.bufferedReader(file.reader());
-    const reader = br.reader();
-
+pub fn load(gpa: std.mem.Allocator, reader: anytype) !Canvas {
     var buf: [3]u8 = undefined;
     try reader.readNoEof(&buf); // magic
     if (!std.mem.eql(u8, &buf, config.save_format_magic)) return error.MagicNotFound;
@@ -170,4 +147,42 @@ pub fn load(gpa: std.mem.Allocator, dir: std.fs.Dir) !Canvas {
         try reader.readNoEof(std.mem.sliceAsBytes(canvas.history.events.items));
     }
     return canvas;
+}
+
+pub fn deinit(canvas: *Canvas, gpa: std.mem.Allocator) void {
+    canvas.strokes.deinit(gpa);
+    canvas.segments.deinit(gpa);
+    canvas.history.deinit(gpa);
+}
+
+test Canvas {
+    const alloc = std.testing.allocator;
+    var random = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const rand = random.random();
+
+    var canvas = Canvas{};
+    defer canvas.deinit(alloc);
+
+    try canvas.startStroke(alloc, @bitCast(random.random().int(u32)));
+    for (0..100_000) |_| {
+        switch (rand.weightedIndex(
+            u16,
+            &.{ 1000, 10, 100, 1 },
+        )) {
+            0 => try canvas.addStrokePoint(alloc, .init(
+                rand.float(f32),
+                rand.float(f32),
+            )),
+            1 => try canvas.startStroke(alloc, @bitCast(random.random().int(u32))),
+            2 => try canvas.erase(alloc, .init(
+                rand.float(f32),
+                rand.float(f32),
+            ), .init(
+                rand.float(f32),
+                rand.float(f32),
+            ), 10),
+            3 => try canvas.save(std.io.null_writer),
+            else => unreachable,
+        }
+    }
 }

@@ -65,10 +65,13 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-
+    exe_unit_tests.root_module.addOptions("options", options);
     exe_unit_tests.linkLibrary(raylib_artifact);
     exe_unit_tests.root_module.addImport("raylib", raylib);
     exe_unit_tests.root_module.addImport("raygui", raygui);
+    exe_unit_tests.root_module.addImport("tracy", tracy.module("tracy"));
+    exe_unit_tests.linkLibrary(tracy.artifact("tracy"));
+    exe_unit_tests.linkLibCpp();
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 
