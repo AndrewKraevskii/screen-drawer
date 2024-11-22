@@ -235,6 +235,15 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
     return drawer;
 }
 
+pub fn deinit(self: *Drawer) void {
+    self.save() catch |e| {
+        std.log.err("Failed to save: {s}", .{@errorName(e)});
+    };
+    self.save_directory.close();
+    self.canvas.deinit(self.gpa);
+    rl.closeWindow();
+}
+
 fn drawKeybindingsHelp(arena: std.mem.Allocator, position: rl.Vector2) !void {
     const zone = tracy.initZone(@src(), .{ .name = "drawKeybindingsHelp" });
     defer zone.deinit();
@@ -341,15 +350,6 @@ fn drawKeybindingsHelp(arena: std.mem.Allocator, position: rl.Vector2) !void {
     }
 }
 
-pub fn deinit(self: *Drawer) void {
-    self.save() catch |e| {
-        std.log.err("Failed to save: {s}", .{@errorName(e)});
-    };
-    self.save_directory.close();
-    self.canvas.deinit(self.gpa);
-    rl.closeWindow();
-}
-
 pub fn run(self: *Drawer) !void {
     while (!(rl.windowShouldClose() or
         (config.exit_on_unfocus and !rl.isWindowFocused())))
@@ -398,6 +398,16 @@ fn tick(self: *Drawer) !void {
         try self.save();
         std.log.info("Saved image", .{});
     }
+    if (isPressedRepeat(config.key_bindings.undo)) {
+        if (self.canvas.history.undo()) |undo_event| {
+            undo_event.undo(&self.canvas);
+        }
+    }
+    if (isPressedRepeat(config.key_bindings.redo)) {
+        if (self.canvas.history.redo()) |redo_event| {
+            redo_event.redo(&self.canvas);
+        }
+    }
 
     {
         const zone = tracy.initZone(@src(), .{ .name = "Line drawing" });
@@ -419,16 +429,6 @@ fn tick(self: *Drawer) !void {
                     rl.drawLineEx(line[0], line[1], self.brush.radius, stroke.color);
                 }
             }
-        }
-    }
-    if (isPressed(config.key_bindings.undo)) {
-        if (self.canvas.history.undo()) |undo_event| {
-            undo_event.undo(&self.canvas);
-        }
-    }
-    if (isPressed(config.key_bindings.redo)) {
-        if (self.canvas.history.redo()) |redo_event| {
-            redo_event.redo(&self.canvas);
         }
     }
     self.brush_state = switch (self.brush_state) {
@@ -550,6 +550,22 @@ fn isPressed(keys_or_buttons: anytype) bool {
     inline for (keys_or_buttons) |key_or_button| {
         switch (@TypeOf(key_or_button)) {
             rl.KeyboardKey => if (rl.isKeyPressed(key_or_button) and !isModifierKey(key_or_button))
+                return true,
+            rl.MouseButton => if (rl.isMouseButtonPressed(key_or_button))
+                return true,
+            else => unreachable, // since we checked it in isDown
+        }
+    }
+
+    return false;
+}
+
+fn isPressedRepeat(keys_or_buttons: anytype) bool {
+    if (!isDown(keys_or_buttons)) return false;
+
+    inline for (keys_or_buttons) |key_or_button| {
+        switch (@TypeOf(key_or_button)) {
+            rl.KeyboardKey => if (rl.isKeyPressedRepeat(key_or_button) and !isModifierKey(key_or_button))
                 return true,
             rl.MouseButton => if (rl.isMouseButtonPressed(key_or_button))
                 return true,

@@ -163,11 +163,14 @@ test Canvas {
     var canvas = Canvas{};
     defer canvas.deinit(alloc);
 
+    var file = std.ArrayList(u8).init(alloc);
+    defer file.deinit();
+
     try canvas.startStroke(alloc, @bitCast(random.random().int(u32)));
     for (0..100_000) |_| {
-        switch (rand.weightedIndex(
+        thing_to_do: switch (rand.weightedIndex(
             u16,
-            &.{ 1000, 10, 100, 1 },
+            &.{ 1000, 10, 100, 1, 1 },
         )) {
             0 => try canvas.addStrokePoint(alloc, .init(
                 rand.float(f32),
@@ -181,7 +184,17 @@ test Canvas {
                 rand.float(f32),
                 rand.float(f32),
             ), 10),
-            3 => try canvas.save(std.io.null_writer),
+            3 => {
+                try canvas.save(file.writer());
+            },
+            4 => {
+                if (file.items.len == 0) {
+                    continue :thing_to_do 3;
+                }
+                var fbr = std.io.fixedBufferStream(file.items);
+                canvas.deinit(alloc);
+                canvas = try Canvas.load(alloc, fbr.reader());
+            },
             else => unreachable,
         }
     }
