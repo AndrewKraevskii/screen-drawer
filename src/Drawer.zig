@@ -4,11 +4,11 @@ const rl = @import("raylib");
 const tracy = @import("tracy");
 
 const Canvas = @import("Canvas.zig");
-const HistoryStorage = @import("history.zig").History;
 const is_debug = @import("main.zig").is_debug;
 const main = @import("main.zig");
 const config = main.config;
 const OverrideQueue = @import("override_queue.zig").OverrideQueue;
+const Rectangle = @import("Rectangle.zig");
 
 const Drawer = @This();
 
@@ -186,7 +186,7 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
         .msaa_4x_hint = true,
     });
     rl.setTraceLogLevel(if (is_debug) .log_debug else .log_warning);
-    rl.initWindow(0, 0, "Drawer");
+    rl.initWindow(0, 0, config.app_name);
     errdefer rl.closeWindow();
 
     const dir_path = try getAppDataDirEnsurePathExist(gpa, config.save_folder_name);
@@ -282,10 +282,10 @@ fn drawKeybindingsHelp(arena: std.mem.Allocator, position: rl.Vector2) !void {
         break :max_width .{ max_width_left, max_width_right };
     };
 
-    const drawing_rect = rl.Rectangle.init(starting_position.x, starting_position.y, max_width_left + max_width_right, help_window_height);
+    const drawing_rect = Rectangle.init(starting_position.x, starting_position.y, max_width_left + max_width_right, help_window_height);
 
     rl.drawRectangleRec(
-        padRectangle(drawing_rect, .{ .x = 10, .y = 10 }),
+        drawing_rect.padRectangle(.{ .x = 10, .y = 10 }).toRay(),
         rl.Color.black.alpha(0.9),
     );
 
@@ -349,71 +349,6 @@ pub fn run(self: *Drawer) !void {
         try tick(self);
     }
 }
-
-const Bar = struct {
-    center: rl.Vector2,
-    min: f32,
-    max: f32,
-    scale: f32,
-    text: [:0]const u8,
-    color: rl.Color,
-
-    const Config = struct {
-        min: f32 = 0,
-        max: f32 = 1,
-        scale: f32 = 200,
-        text: [:0]const u8 = "Some ui bar",
-        color: rl.Color = .gray,
-    };
-
-    fn new(pos: rl.Vector2, value: f32, bar_config: Config) @This() {
-        const top_y = pos.y - bar_config.scale / 2;
-        const persantage = (value - bar_config.min) / (bar_config.max - bar_config.min);
-        return .{
-            .center = .init(
-                pos.x - 50,
-                persantage * bar_config.scale + top_y,
-            ),
-            .min = bar_config.min,
-            .max = bar_config.max,
-            .scale = bar_config.scale,
-            .text = bar_config.text,
-            .color = bar_config.color,
-        };
-    }
-
-    fn draw(self: @This(), cursor_pos: rl.Vector2) f32 {
-        const bar_top = self.center.add(.init(0, self.scale / 2));
-        const bar_bottom = self.center.subtract(.init(0, self.scale / 2));
-        const bar_width = 10;
-        rl.drawLineEx(
-            bar_top,
-            bar_bottom,
-            bar_width,
-            rl.Color.gray,
-        );
-        const bar_size = 10;
-        const bar_middle_pos = rl.Vector2.init(self.center.x, std.math.clamp(cursor_pos.y, bar_bottom.y, bar_top.y));
-        const font_size = 30;
-        const text_width = rl.measureText(self.text, font_size);
-        rl.drawText(
-            self.text,
-            @as(i32, @intFromFloat(self.center.x)) - text_width - bar_width,
-            @as(i32, @intFromFloat(self.center.y)) - font_size / 2,
-            font_size,
-            .white,
-        );
-        rl.drawLineEx(
-            bar_middle_pos.add(.init(0, bar_size / 2)),
-            bar_middle_pos.subtract(.init(0, bar_size / 2)),
-            bar_width,
-            rl.Color.black,
-        );
-
-        const selected_value = (bar_top.y - bar_middle_pos.y) / self.scale;
-        return selected_value * (self.max - self.min) + self.min;
-    }
-};
 
 fn save(self: *@This()) !void {
     var file = try self.save_directory.createFile(config.save_file_name, .{});
@@ -648,6 +583,71 @@ const ColorWheel = struct {
     }
 };
 
+const Bar = struct {
+    center: rl.Vector2,
+    min: f32,
+    max: f32,
+    scale: f32,
+    text: [:0]const u8,
+    color: rl.Color,
+
+    const Config = struct {
+        min: f32 = 0,
+        max: f32 = 1,
+        scale: f32 = 200,
+        text: [:0]const u8 = "Some ui bar",
+        color: rl.Color = .gray,
+    };
+
+    fn new(pos: rl.Vector2, value: f32, bar_config: Config) @This() {
+        const top_y = pos.y - bar_config.scale / 2;
+        const persantage = (value - bar_config.min) / (bar_config.max - bar_config.min);
+        return .{
+            .center = .init(
+                pos.x - 50,
+                persantage * bar_config.scale + top_y,
+            ),
+            .min = bar_config.min,
+            .max = bar_config.max,
+            .scale = bar_config.scale,
+            .text = bar_config.text,
+            .color = bar_config.color,
+        };
+    }
+
+    fn draw(self: @This(), cursor_pos: rl.Vector2) f32 {
+        const bar_top = self.center.add(.init(0, self.scale / 2));
+        const bar_bottom = self.center.subtract(.init(0, self.scale / 2));
+        const bar_width = 10;
+        rl.drawLineEx(
+            bar_top,
+            bar_bottom,
+            bar_width,
+            rl.Color.gray,
+        );
+        const bar_size = 10;
+        const bar_middle_pos = rl.Vector2.init(self.center.x, std.math.clamp(cursor_pos.y, bar_bottom.y, bar_top.y));
+        const font_size = 30;
+        const text_width = rl.measureText(self.text, font_size);
+        rl.drawText(
+            self.text,
+            @as(i32, @intFromFloat(self.center.x)) - text_width - bar_width,
+            @as(i32, @intFromFloat(self.center.y)) - font_size / 2,
+            font_size,
+            .white,
+        );
+        rl.drawLineEx(
+            bar_middle_pos.add(.init(0, bar_size / 2)),
+            bar_middle_pos.subtract(.init(0, bar_size / 2)),
+            bar_width,
+            rl.Color.black,
+        );
+
+        const selected_value = (bar_top.y - bar_middle_pos.y) / self.scale;
+        return selected_value * (self.max - self.min) + self.min;
+    }
+};
+
 fn expDecay(a: anytype, b: @TypeOf(a), lambda: @TypeOf(a), dt: @TypeOf(a)) @TypeOf(a) {
     return std.math.lerp(a, b, 1 - @exp(-lambda * dt));
 }
@@ -657,44 +657,4 @@ fn expDecayWithAnimationSpeed(a: anytype, b: @TypeOf(a), dt: @TypeOf(a)) @TypeOf
         std.math.lerp(a, b, 1 - @exp(-lambda * dt))
     else
         b;
-}
-
-fn scaleRectangleCenter(rect: rl.Rectangle, scale: rl.Vector2) rl.Rectangle {
-    return resizeRectangleCenter(rect, scale.multiply(rectangleSize(rect)));
-}
-
-fn scaleRectangle(rect: rl.Rectangle, scale: rl.Vector2, origin: rl.Vector2) rl.Rectangle {
-    return resizeRectangle(rect, scale.multiply(rectangleSize(rect)), origin);
-}
-
-fn resizeRectangleCenter(rect: rl.Rectangle, size: rl.Vector2) rl.Rectangle {
-    return resizeRectangle(rect, size, .{
-        .x = 0.5,
-        .y = 0.5,
-    });
-}
-
-fn padRectangle(rect: rl.Rectangle, padding: rl.Vector2) rl.Rectangle {
-    return .{
-        .x = rect.x - padding.x,
-        .y = rect.y - padding.y,
-        .width = rect.width + 2 * padding.x,
-        .height = rect.height + 2 * padding.y,
-    };
-}
-
-fn resizeRectangle(rect: rl.Rectangle, size: rl.Vector2, origin: rl.Vector2) rl.Rectangle {
-    return .{
-        .x = rect.x + (rect.width - size.x) * origin.x,
-        .y = rect.y + (rect.height - size.y) * origin.y,
-        .width = size.x,
-        .height = size.y,
-    };
-}
-
-fn rectangleSize(rect: rl.Rectangle) rl.Vector2 {
-    return .{
-        .x = rect.width,
-        .y = rect.height,
-    };
 }
