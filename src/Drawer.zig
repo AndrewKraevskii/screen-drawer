@@ -45,6 +45,9 @@ const Canvas = struct {
     history: History = .{},
 
     fn save(canvas: *Canvas, gpa: std.mem.Allocator) !void {
+        const zone = tracy.initZone(@src(), .{});
+        defer zone.deinit();
+
         const dir_path = try getAppDataDirEnsurePathExist(gpa, save_folder_name);
         defer gpa.free(dir_path);
 
@@ -69,6 +72,9 @@ const Canvas = struct {
     }
 
     fn load(gpa: std.mem.Allocator) !Canvas {
+        const zone = tracy.initZone(@src(), .{});
+        defer zone.deinit();
+
         const dir_path = try getAppDataDirEnsurePathExist(gpa, save_folder_name);
         defer gpa.free(dir_path);
 
@@ -660,8 +666,8 @@ pub fn tick(self: *Drawer) !void {
         self.color_wheel.size = expDecayWithAnimationSpeed(self.color_wheel.size, 0, rl.getFrameTime());
         _ = self.color_wheel.draw(cursor_position);
     }
-    // Draw mouse
 
+    // Draw mouse
     if (self.brush_state == .eraser) {
         rl.drawCircleLinesV(cursor_position, config.eraser_thickness / 2, self.brush.color);
     } else {
