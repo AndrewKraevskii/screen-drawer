@@ -7,6 +7,9 @@ const Drawer = @import("Drawer.zig");
 
 pub const config = struct {
     pub const app_name = "screen-drawer";
+    pub const save_folder_name = "screen_drawer_vector";
+    pub const save_file_name = "save" ++ "." ++ save_format_magic;
+    pub const save_format_magic = "sdv";
 
     pub const key_bindings = struct {
         // zig fmt: off
