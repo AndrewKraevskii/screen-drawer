@@ -494,7 +494,7 @@ fn tick(self: *Drawer) !void {
         if (self.background_alpha_selector) |bar| {
             self.background_color = self.background_color.alpha(bar.draw(cursor_position));
         } else {
-            self.background_alpha_selector = Bar.new(cursor_position, self.background_color.normalize().w, .{ .text = "Background alpha" });
+            self.background_alpha_selector = Bar.init(cursor_position, self.background_color.normalize().w, .{ .text = "Background alpha" });
         }
     } else {
         if (self.background_alpha_selector) |_| {
@@ -599,7 +599,7 @@ const Bar = struct {
         color: rl.Color = .gray,
     };
 
-    fn new(pos: rl.Vector2, value: f32, bar_config: Config) @This() {
+    fn init(pos: rl.Vector2, value: f32, bar_config: Config) @This() {
         const top_y = pos.y - bar_config.scale / 2;
         const persantage = (value - bar_config.min) / (bar_config.max - bar_config.min);
         return .{
