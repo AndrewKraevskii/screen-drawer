@@ -30,6 +30,6 @@ It stores images in default location for apps to store data on your OS.
 - [ ] Do some testing
 - [ ] Support of image importing using clipboard
 - [ ] Draw grid
-- [ ] Since it's now vector format do infinite canvas
+- [x] Since it's now vector format do infinite canvas
 - [ ] Export canvases
 - [ ] Regular drawing board mode?

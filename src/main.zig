@@ -4,6 +4,7 @@ const rl = @import("raylib");
 const tracy = @import("tracy");
 
 const Drawer = @import("Drawer.zig");
+
 pub const Vector2 = @Vector(2, f32);
 
 pub const config = struct {
@@ -18,8 +19,8 @@ pub const config = struct {
         pub const undo                = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };
         pub const redo                = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
         pub const picking_color       = .{ rl.KeyboardKey.key_left_bracket };
-        pub const eraser              = .{ rl.MouseButton.mouse_button_right };
-        pub const confirm             = .{ rl.MouseButton.mouse_button_left };
+        pub const eraser              = .{ rl.KeyboardKey.key_e };
+        pub const drag                = .{ rl.MouseButton.mouse_button_right };
         pub const toggle_keybindings  = .{ rl.KeyboardKey.key_h };
         pub const enable_cursor_trail = .{ rl.KeyboardKey.key_t };
         pub const change_brightness   = .{ rl.KeyboardKey.key_b };

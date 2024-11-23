@@ -27,7 +27,7 @@ brush: struct {
     color: rl.Color,
 },
 
-canvas: Canvas = .{},
+canvas: Canvas,
 old_world_position: Vec2,
 old_cursor_position: Vec2,
 
@@ -42,7 +42,7 @@ background_color: rl.Color = .blank,
 background_alpha_selector: ?Bar = null,
 
 random: std.Random.DefaultPrng,
-camera: rl.Camera2D,
+target_zoom: f32,
 
 save_directory: std.fs.Dir,
 
@@ -193,27 +193,8 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
 
     var dir = try std.fs.openDirAbsolute(dir_path, .{});
     errdefer dir.close();
-    const camera: rl.Camera2D = .{
-        .zoom = 1,
-        .target = @bitCast(@as(Vec2, @splat(100))),
-        .offset = .zero(),
-        .rotation = 0,
-    };
-    var drawer: Drawer = .{
-        .camera = camera,
-        .gpa = gpa,
-        .color_wheel = .{ .center = @splat(0), .size = 0 },
-        .brush = .{
-            .color = rl.Color.red,
-        },
-        .old_world_position = @bitCast(rl.getScreenToWorld2D(rl.getMousePosition(), camera)),
-        .old_cursor_position = @bitCast(rl.getMousePosition()),
-        .brush_state = .idle,
-        .random = std.Random.DefaultPrng.init(0),
-        .save_directory = dir,
-    };
 
-    { // load canvas
+    const canvas = canvas: { // load canvas
         const file_zone = tracy.initZone(@src(), .{ .name = "Open file" });
         var file = try dir.openFile(config.save_file_name, .{});
         file_zone.deinit();
@@ -222,12 +203,31 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
         var br = std.io.bufferedReader(file.reader());
         const reader = br.reader();
 
-        drawer.canvas = Canvas.load(gpa, reader) catch |e| canvas: {
+        break :canvas Canvas.load(gpa, reader) catch |e| {
             std.log.err("Can't load file {s}", .{@errorName(e)});
 
             break :canvas Canvas{};
         };
-    }
+    };
+
+    var drawer: Drawer = .{
+        .target_zoom = canvas.camera.zoom,
+        .gpa = gpa,
+        .color_wheel = .{ .center = @splat(0), .size = 0 },
+        .brush = .{
+            .color = rl.Color.red,
+        },
+        .old_world_position = @bitCast(rl.getScreenToWorld2D(rl.getMousePosition(), canvas.camera)),
+        .old_cursor_position = @bitCast(rl.getMousePosition()),
+        .brush_state = .idle,
+        .random = std.Random.DefaultPrng.init(0),
+        .save_directory = dir,
+        .canvas = canvas,
+    };
+    drawer.canvas.camera.offset = .init(
+        @floatFromInt(@divFloor(rl.getScreenWidth(), 2)),
+        @floatFromInt(@divFloor(rl.getScreenHeight(), 2)),
+    );
 
     return drawer;
 }
@@ -377,7 +377,7 @@ fn tick(self: *Drawer) !void {
     tracy.plot(i64, "segments size", @intCast(self.canvas.segments.items.len));
 
     const cursor_position: Vec2 = @bitCast(rl.getMousePosition());
-    const world_position: Vec2 = @bitCast(rl.getScreenToWorld2D(rl.getMousePosition(), self.camera));
+    const world_position: Vec2 = @bitCast(rl.getScreenToWorld2D(rl.getMousePosition(), self.canvas.camera));
     defer self.old_world_position = world_position;
     defer self.old_cursor_position = cursor_position;
 
@@ -392,6 +392,13 @@ fn tick(self: *Drawer) !void {
         try self.save();
         std.log.info("Saved image", .{});
     }
+    if (isDown(config.key_bindings.drag)) {
+        self.canvas.camera.target = self.canvas.camera.target.subtract(rl.getMouseDelta().scale(1 / self.canvas.camera.zoom));
+    }
+
+    self.target_zoom *= @exp(rl.getMouseWheelMoveV().y);
+    self.canvas.camera.zoom = expDecayWithAnimationSpeed(self.canvas.camera.zoom, self.target_zoom, rl.getFrameTime());
+
     if (isPressedRepeat(config.key_bindings.undo)) {
         if (self.canvas.history.undo()) |undo_event| {
             undo_event.undo(&self.canvas);
@@ -407,27 +414,38 @@ fn tick(self: *Drawer) !void {
         const zone = tracy.initZone(@src(), .{ .name = "Line drawing" });
         defer zone.deinit();
 
-        self.camera.begin();
-        defer self.camera.end();
+        self.canvas.camera.begin();
+        defer self.canvas.camera.end();
 
         for (self.canvas.strokes.items) |stroke| {
-            if (stroke.is_active) {
-                if (stroke.span.size < 2) continue;
-                var iter = std.mem.window(
-                    [2]f32,
-                    self.canvas.segments.items[stroke.span.start..][0..stroke.span.size],
-                    2,
-                    1,
-                );
-                while (iter.next()) |line| {
-                    rl.drawLineEx(@bitCast(line[0]), @bitCast(line[1]), self.brush.radius, stroke.color);
+            if (stroke.is_active and stroke.span.size >= 2) {
+                const DrawType = enum {
+                    none,
+                    linear,
+                    catmull_rom,
+                };
+                const draw_type: DrawType = if (self.canvas.camera.zoom < stroke.width) .linear else .catmull_rom;
+                switch (draw_type) {
+                    .none => continue,
+                    .linear => rl.drawSplineLinear(
+                        @ptrCast(self.canvas.segments.items[stroke.span.start..][0..stroke.span.size]),
+                        stroke.width,
+                        stroke.color,
+                    ),
+                    .catmull_rom => {
+                        rl.drawSplineCatmullRom(
+                            @ptrCast(self.canvas.segments.items[stroke.span.start..][0..stroke.span.size]),
+                            stroke.width,
+                            stroke.color,
+                        );
+                    },
                 }
             }
         }
     }
     self.brush_state = switch (self.brush_state) {
         .idle => if (isDown(config.key_bindings.draw)) state: {
-            try self.canvas.startStroke(self.gpa, self.brush.color);
+            try self.canvas.startStroke(self.gpa, self.brush.color, config.line_thickness / self.canvas.camera.zoom);
             break :state .drawing;
         } else if (isDown(config.key_bindings.eraser))
             .eraser
@@ -440,6 +458,7 @@ fn tick(self: *Drawer) !void {
             try self.canvas.addStrokePoint(
                 self.gpa,
                 @bitCast(world_position),
+                self.canvas.camera.zoom,
             );
             break :state if (isDown(config.key_bindings.draw))
                 .drawing
@@ -511,7 +530,14 @@ fn tick(self: *Drawer) !void {
             self.background_alpha_selector = null;
         }
     }
+    {
+        const fmt_string = "zoom level: {d:.1}";
 
+        var buffer: [std.fmt.count(fmt_string, .{std.math.floatMax(f32)}) + 1]u8 = undefined;
+        // const str = try std.fmt.bufPrintZ(&buffer, fmt_string, .{@log(self.camera.zoom)});
+        const str = try std.fmt.bufPrintZ(&buffer, fmt_string, .{@log(self.canvas.camera.zoom)});
+        rl.drawText(str, 40, 10, 50, .white);
+    }
     if (self.showing_keybindings) {
         try drawKeybindingsHelp(arena.allocator(), .{ 100, 100 });
     }
@@ -606,7 +632,7 @@ const ColorWheel = struct {
         }
         const distance = @min(@sqrt(@reduce(.Add, (wheel.center - pos) * (wheel.center - pos))) / wheel.size, 1);
         const direction = pos - wheel.center;
-        const angle = std.math.atan2(direction[0], direction[1]);
+        const angle = std.math.atan2(direction[1], direction[0]);
         return rl.Color.fromHSV(angle / std.math.tau * 360, distance, 1);
     }
 };

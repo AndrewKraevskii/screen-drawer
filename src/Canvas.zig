@@ -38,6 +38,7 @@ const Stroke = struct {
     is_active: bool = true,
     span: Span,
     color: rl.Color,
+    width: f32,
 };
 
 const Span = struct {
@@ -48,24 +49,38 @@ const Span = struct {
 strokes: std.ArrayListUnmanaged(Stroke) = .{},
 segments: std.ArrayListUnmanaged([2]f32) = .{},
 history: History = .{},
+camera: rl.Camera2D = .{
+    .zoom = 1,
+    .target = .{ .x = 0, .y = 0 },
+    .offset = .init(
+        @floatFromInt(@divFloor(1000, 2)),
+        @floatFromInt(@divFloor(1000, 2)),
+    ),
+    .rotation = 0,
+},
 
 pub fn startStroke(
     canvas: *@This(),
     gpa: std.mem.Allocator,
     color: rl.Color,
+    thickness: f32,
 ) error{OutOfMemory}!void {
     try canvas.history.addHistoryEntry(gpa, .{ .drawn = canvas.strokes.items.len });
 
-    try canvas.strokes.append(gpa, .{ .span = .{
-        .start = canvas.segments.items.len,
-        .size = 0,
-    }, .color = color });
+    try canvas.strokes.append(gpa, .{
+        .span = .{
+            .start = canvas.segments.items.len,
+            .size = 0,
+        },
+        .color = color,
+        .width = thickness,
+    });
 }
 
-pub fn addStrokePoint(canvas: *@This(), gpa: std.mem.Allocator, pos: [2]f32) error{OutOfMemory}!void {
+pub fn addStrokePoint(canvas: *@This(), gpa: std.mem.Allocator, pos: [2]f32, min_distance: f32) error{OutOfMemory}!void {
     std.debug.assert(canvas.strokes.items.len != 0);
     // if previous segment is to small update it instead of adding new.
-    const min_distance = 10;
+    // const min_distance = 10;
     const min_distance_squared = min_distance * min_distance;
     if (canvas.strokes.items[canvas.strokes.items.len - 1].span.size >= 1 and canvas.segments.items.len >= 2) {
         const start: Vector2 = canvas.segments.items[canvas.segments.items.len - 2];
@@ -128,6 +143,7 @@ pub fn save(canvas: *Canvas, writer: anytype) !void {
     }
     try writer.writeInt(u64, canvas.history.events.items.len, .little);
     try writer.writeAll(std.mem.sliceAsBytes(canvas.history.events.items));
+    try writer.writeAll(std.mem.asBytes(&canvas.camera));
 }
 
 pub fn load(gpa: std.mem.Allocator, reader: anytype) !Canvas {
@@ -148,6 +164,7 @@ pub fn load(gpa: std.mem.Allocator, reader: anytype) !Canvas {
         try canvas.history.events.resize(gpa, size);
         try reader.readNoEof(std.mem.sliceAsBytes(canvas.history.events.items));
     }
+    try reader.readNoEof(std.mem.asBytes(&canvas.camera));
     return canvas;
 }
 
