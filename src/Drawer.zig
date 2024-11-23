@@ -648,7 +648,7 @@ const Bar = struct {
 
     const Orientation = enum {
         vertical,
-        horisontal,
+        horizontal,
     };
 
     const Config = struct {
