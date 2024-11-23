@@ -135,6 +135,7 @@ pub fn load(gpa: std.mem.Allocator, reader: anytype) !Canvas {
     if (!std.mem.eql(u8, &buf, config.save_format_magic)) return error.MagicNotFound;
 
     var canvas = Canvas{};
+    errdefer canvas.deinit(gpa);
 
     inline for (.{ "segments", "strokes" }) |field| {
         const size = try reader.readInt(u64, .little);
@@ -192,10 +193,60 @@ test Canvas {
                     continue :thing_to_do 3;
                 }
                 var fbr = std.io.fixedBufferStream(file.items);
+                const new_canvas = try Canvas.load(alloc, fbr.reader());
                 canvas.deinit(alloc);
-                canvas = try Canvas.load(alloc, fbr.reader());
+                canvas = new_canvas;
             },
             else => unreachable,
         }
     }
+}
+
+test "Check leaks canvas" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        pub fn foo(alloc: std.mem.Allocator) !void {
+            var random = std.Random.DefaultPrng.init(std.testing.random_seed);
+            const rand = random.random();
+
+            var canvas = Canvas{};
+            defer canvas.deinit(alloc);
+
+            var file = std.ArrayList(u8).init(alloc);
+            defer file.deinit();
+
+            try canvas.startStroke(alloc, @bitCast(random.random().int(u32)));
+            for (0..100_000) |_| {
+                thing_to_do: switch (rand.weightedIndex(
+                    u16,
+                    &.{ 1000, 10, 100, 1, 1 },
+                )) {
+                    0 => try canvas.addStrokePoint(alloc, .init(
+                        rand.float(f32),
+                        rand.float(f32),
+                    )),
+                    1 => try canvas.startStroke(alloc, @bitCast(random.random().int(u32))),
+                    2 => try canvas.erase(alloc, .init(
+                        rand.float(f32),
+                        rand.float(f32),
+                    ), .init(
+                        rand.float(f32),
+                        rand.float(f32),
+                    ), 10),
+                    3 => {
+                        try canvas.save(file.writer());
+                    },
+                    4 => {
+                        if (file.items.len == 0) {
+                            continue :thing_to_do 3;
+                        }
+                        var fbr = std.io.fixedBufferStream(file.items);
+                        const new_canvas = try Canvas.load(alloc, fbr.reader());
+                        canvas.deinit(alloc);
+                        canvas = new_canvas;
+                    },
+                    else => unreachable,
+                }
+            }
+        }
+    }.foo, .{});
 }
