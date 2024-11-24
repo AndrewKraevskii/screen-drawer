@@ -12,6 +12,7 @@ const OverrideQueue = @import("override_queue.zig").OverrideQueue;
 const Rectangle = @import("Rectangle.zig");
 
 const Drawer = @This();
+
 gpa: std.mem.Allocator,
 
 brush_state: union(enum) {
@@ -424,7 +425,8 @@ fn tick(self: *Drawer) !void {
                     linear,
                     catmull_rom,
                 };
-                const draw_type: DrawType = if (self.canvas.camera.zoom < stroke.width) .linear else .catmull_rom;
+                const draw_type: DrawType =
+                    if (stroke.span.size < 4 or 1 / self.canvas.camera.zoom > stroke.width) .linear else .catmull_rom;
                 switch (draw_type) {
                     .none => continue,
                     .linear => rl.drawSplineLinear(
@@ -443,6 +445,20 @@ fn tick(self: *Drawer) !void {
             }
         }
     }
+    // for (self.canvas.strokes.items) |stroke| {
+    //     if (stroke.is_active and stroke.span.size >= 2) {
+    //         const fmt_string = "{d}";
+    //         var buffer: [std.fmt.count(fmt_string, .{std.math.floatMax(f32)}) + 1]u8 = undefined;
+    //         const pos = rl.getWorldToScreen2D(@bitCast(self.canvas.segments.items[stroke.span.start]), self.canvas.camera);
+    //         if (pos.x > -10 and pos.x < @as(f32, @floatFromInt(rl.getScreenWidth() + 100)) and
+    //             pos.y > -100 and pos.y < @as(f32, @floatFromInt(rl.getScreenHeight() + 100)))
+    //         {
+    //             const str = try std.fmt.bufPrintZ(&buffer, fmt_string, .{stroke.width});
+    //             rl.drawText(str, @intFromFloat(pos.x), @intFromFloat(pos.y), 50, .white);
+    //         }
+    //     }
+    // }
+
     self.brush_state = switch (self.brush_state) {
         .idle => if (isDown(config.key_bindings.draw)) state: {
             try self.canvas.startStroke(self.gpa, self.brush.color, config.line_thickness / self.canvas.camera.zoom);
@@ -531,12 +547,19 @@ fn tick(self: *Drawer) !void {
         }
     }
     {
-        const fmt_string = "zoom level: {d:.1}";
+        const fmt_string = "zoom level: {d}";
 
         var buffer: [std.fmt.count(fmt_string, .{std.math.floatMax(f32)}) + 1]u8 = undefined;
-        // const str = try std.fmt.bufPrintZ(&buffer, fmt_string, .{@log(self.camera.zoom)});
-        const str = try std.fmt.bufPrintZ(&buffer, fmt_string, .{@log(self.canvas.camera.zoom)});
-        rl.drawText(str, 40, 10, 50, .white);
+        {
+            const str = try std.fmt.bufPrintZ(&buffer, fmt_string, .{@log(self.canvas.camera.zoom)});
+            rl.drawText(str, 40, 10, 50, .white);
+        }
+        {
+            const str = try std.fmt.bufPrintZ(&buffer, fmt_string, .{1 / self.canvas.camera.zoom});
+            rl.drawText(str, 40, 70, 50, .white);
+        }
+        const str = try std.fmt.allocPrintZ(arena.allocator(), "position: {d}x,{d}y", .{ self.canvas.camera.target.x, self.canvas.camera.target.y });
+        rl.drawText(str, 40, 130, 50, .white);
     }
     if (self.showing_keybindings) {
         try drawKeybindingsHelp(arena.allocator(), .{ 100, 100 });

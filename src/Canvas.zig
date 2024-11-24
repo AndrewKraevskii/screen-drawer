@@ -185,24 +185,24 @@ test Canvas {
     var file = std.ArrayList(u8).init(alloc);
     defer file.deinit();
 
-    try canvas.startStroke(alloc, @bitCast(random.random().int(u32)));
+    try canvas.startStroke(alloc, @bitCast(random.random().int(u32)), 10);
     for (0..100_000) |_| {
         thing_to_do: switch (rand.weightedIndex(
             u16,
             &.{ 1000, 10, 100, 1, 1 },
         )) {
-            0 => try canvas.addStrokePoint(alloc, .init(
+            0 => try canvas.addStrokePoint(alloc, .{
                 rand.float(f32),
                 rand.float(f32),
-            )),
-            1 => try canvas.startStroke(alloc, @bitCast(random.random().int(u32))),
-            2 => try canvas.erase(alloc, .init(
+            }, 10),
+            1 => try canvas.startStroke(alloc, @bitCast(random.random().int(u32)), 10),
+            2 => try canvas.erase(alloc, .{
                 rand.float(f32),
                 rand.float(f32),
-            ), .init(
+            }, .{
                 rand.float(f32),
                 rand.float(f32),
-            ), 10),
+            }, 10),
             3 => {
                 try canvas.save(file.writer());
             },
@@ -232,24 +232,24 @@ test "Check leaks canvas" {
             var file = std.ArrayList(u8).init(alloc);
             defer file.deinit();
 
-            try canvas.startStroke(alloc, @bitCast(random.random().int(u32)));
+            try canvas.startStroke(alloc, @bitCast(random.random().int(u32)), 10);
             for (0..100_000) |_| {
                 thing_to_do: switch (rand.weightedIndex(
                     u16,
                     &.{ 1000, 10, 100, 1, 1 },
                 )) {
-                    0 => try canvas.addStrokePoint(alloc, .init(
+                    0 => try canvas.addStrokePoint(alloc, .{
                         rand.float(f32),
                         rand.float(f32),
-                    )),
-                    1 => try canvas.startStroke(alloc, @bitCast(random.random().int(u32))),
-                    2 => try canvas.erase(alloc, .init(
+                    }, 10),
+                    1 => try canvas.startStroke(alloc, @bitCast(random.random().int(u32)), 10),
+                    2 => try canvas.erase(alloc, .{
                         rand.float(f32),
                         rand.float(f32),
-                    ), .init(
+                    }, .{
                         rand.float(f32),
                         rand.float(f32),
-                    ), 10),
+                    }, 10),
                     3 => {
                         try canvas.save(file.writer());
                     },
