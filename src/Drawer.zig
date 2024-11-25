@@ -355,9 +355,12 @@ pub fn run(self: *Drawer) !void {
 }
 
 fn save(self: *@This()) !void {
-    var file = try self.save_directory.createFile(config.save_file_name, .{});
-    defer file.close();
-    var bw = std.io.bufferedWriter(file.writer());
+    var atomic_file = try self.save_directory.atomicFile(config.save_file_name, .{});
+    defer atomic_file.deinit();
+    var bw = std.io.bufferedWriter(atomic_file.file.writer());
+    defer atomic_file.finish() catch |e| {
+        std.log.err("Failed to copy file: {s}", .{@errorName(e)});
+    };
     defer bw.flush() catch |e| {
         std.log.err("Failed to save: {s}", .{@errorName(e)});
     };
