@@ -33,6 +33,7 @@ old_world_position: Vec2,
 old_cursor_position: Vec2,
 
 showing_keybindings: bool = false,
+draw_grid: bool = false,
 
 cursor_trail: OverrideQueue(TrailParticle, 0x100) = .empty,
 cursor_trail_enabled: bool = false,
@@ -389,33 +390,48 @@ fn tick(self: *Drawer) !void {
     defer self.old_cursor_position = cursor_position;
 
     // :global input
-    if (isPressed(config.key_bindings.toggle_keybindings)) {
-        self.showing_keybindings = !self.showing_keybindings;
-    }
-    if (isPressed(config.key_bindings.enable_cursor_trail)) {
-        self.cursor_trail_enabled = !self.cursor_trail_enabled;
-    }
-    if (isPressed(config.key_bindings.save)) {
-        try self.save();
-        std.log.info("Saved image", .{});
-    }
-    if (isDown(config.key_bindings.drag)) {
-        self.canvas.camera.target = self.canvas.camera.target.subtract(rl.getMouseDelta().scale(1 / self.canvas.camera.zoom));
-    }
+    {
+        const key_bindings = config.key_bindings;
 
+        if (isPressed(key_bindings.toggle_keybindings)) {
+            self.showing_keybindings = !self.showing_keybindings;
+        }
+        if (isPressed(key_bindings.enable_cursor_trail)) {
+            self.cursor_trail_enabled = !self.cursor_trail_enabled;
+        }
+        if (isPressed(key_bindings.grid)) {
+            self.draw_grid = !self.draw_grid;
+        }
+        if (isPressed(key_bindings.reset_canvas)) {
+            self.canvas.deinit(self.gpa);
+            self.canvas = .init;
+            self.canvas.camera.offset = .init(
+                @floatFromInt(@divFloor(rl.getScreenWidth(), 2)),
+                @floatFromInt(@divFloor(rl.getScreenHeight(), 2)),
+            );
+            self.target_zoom = self.canvas.camera.zoom;
+            std.debug.print("{any}\n", .{self.canvas});
+        }
+        if (isPressed(key_bindings.save)) {
+            try self.save();
+            std.log.info("Saved image", .{});
+        }
+        if (isDown(key_bindings.drag)) {
+            self.canvas.camera.target = self.canvas.camera.target.subtract(rl.getMouseDelta().scale(1 / self.canvas.camera.zoom));
+        }
+        if (isPressedRepeat(key_bindings.undo)) {
+            if (self.canvas.history.undo()) |undo_event| {
+                undo_event.undo(&self.canvas);
+            }
+        }
+        if (isPressedRepeat(key_bindings.redo)) {
+            if (self.canvas.history.redo()) |redo_event| {
+                redo_event.redo(&self.canvas);
+            }
+        }
+    }
     self.target_zoom *= @exp(rl.getMouseWheelMoveV().y);
     self.canvas.camera.zoom = expDecayWithAnimationSpeed(self.canvas.camera.zoom, self.target_zoom, rl.getFrameTime());
-
-    if (isPressedRepeat(config.key_bindings.undo)) {
-        if (self.canvas.history.undo()) |undo_event| {
-            undo_event.undo(&self.canvas);
-        }
-    }
-    if (isPressedRepeat(config.key_bindings.redo)) {
-        if (self.canvas.history.redo()) |redo_event| {
-            redo_event.redo(&self.canvas);
-        }
-    }
 
     {
         const zone = tracy.initZone(@src(), .{ .name = "Line drawing" });
@@ -451,19 +467,6 @@ fn tick(self: *Drawer) !void {
             }
         }
     }
-    // for (self.canvas.strokes.items) |stroke| {
-    //     if (stroke.is_active and stroke.span.size >= 2) {
-    //         const fmt_string = "{d}";
-    //         var buffer: [std.fmt.count(fmt_string, .{std.math.floatMax(f32)}) + 1]u8 = undefined;
-    //         const pos = rl.getWorldToScreen2D(@bitCast(self.canvas.segments.items[stroke.span.start]), self.canvas.camera);
-    //         if (pos.x > -10 and pos.x < @as(f32, @floatFromInt(rl.getScreenWidth() + 100)) and
-    //             pos.y > -100 and pos.y < @as(f32, @floatFromInt(rl.getScreenHeight() + 100)))
-    //         {
-    //             const str = try std.fmt.bufPrintZ(&buffer, fmt_string, .{stroke.width});
-    //             rl.drawText(str, @intFromFloat(pos.x), @intFromFloat(pos.y), 50, .white);
-    //         }
-    //     }
-    // }
 
     self.brush_state = switch (self.brush_state) {
         .idle => if (isDown(config.key_bindings.draw)) state: {
@@ -514,7 +517,14 @@ fn tick(self: *Drawer) !void {
             10,
         });
 
-    // Shrink color picker
+    // Draw grid
+    if (self.draw_grid) {
+        for (0..8) |i| {
+            drawGridScale(self.canvas.camera, std.math.pow(f32, 10, @floatFromInt(i)));
+        }
+    }
+
+    // Shrink and draw color picker
     if (self.brush_state != .picking_color) {
         self.color_wheel.size = expDecayWithAnimationSpeed(self.color_wheel.size, 0, rl.getFrameTime());
         _ = self.color_wheel.draw(cursor_position);
@@ -555,7 +565,7 @@ fn tick(self: *Drawer) !void {
     {
         const fmt_string = "zoom level: {d}";
 
-        var buffer: [std.fmt.count(fmt_string, .{std.math.floatMax(f32)}) + 1]u8 = undefined;
+        var buffer: [std.fmt.count(fmt_string, .{std.math.floatMax(f32)}) + 100]u8 = undefined;
         {
             const str = try std.fmt.bufPrintZ(&buffer, fmt_string, .{@log(self.canvas.camera.zoom)});
             rl.drawText(str, 40, 10, 50, .white);
@@ -574,6 +584,22 @@ fn tick(self: *Drawer) !void {
         rl.drawFPS(0, 0);
 
     rl.endDrawing();
+}
+
+fn drawLabels(canvas: *Canvas) void {
+    for (canvas.strokes.items) |stroke| {
+        if (stroke.is_active and stroke.span.size >= 2) {
+            const fmt_string = "{d}";
+            var buffer: [std.fmt.count(fmt_string, .{std.math.floatMax(f32)}) + 100]u8 = undefined;
+            const pos = rl.getWorldToScreen2D(@bitCast(canvas.segments.items[stroke.span.start]), canvas.camera);
+            if (pos.x > -10 and pos.x < @as(f32, @floatFromInt(rl.getScreenWidth() + 100)) and
+                pos.y > -100 and pos.y < @as(f32, @floatFromInt(rl.getScreenHeight() + 100)))
+            {
+                const str = try std.fmt.bufPrintZ(&buffer, fmt_string, .{stroke.width});
+                rl.drawText(str, @intFromFloat(pos.x), @intFromFloat(pos.y), 50, .white);
+            }
+        }
+    }
 }
 
 /// True if all passed keys and buttons are down
@@ -773,4 +799,27 @@ fn expDecayWithAnimationSpeed(a: anytype, b: @TypeOf(a), dt: @TypeOf(a)) @TypeOf
         std.math.lerp(a, b, 1 - @exp(-lambda * dt))
     else
         b;
+}
+
+const screen_grid_size_min = 10;
+const screen_grid_size_max = 1000;
+
+pub fn drawGridScale(camera: rl.Camera2D, zoom: f32) void {
+    const grid_scale: f32 = camera.zoom * zoom;
+    if (screen_grid_size_min <= grid_scale and grid_scale <= screen_grid_size_max) {
+        var x: f32 = @mod((-camera.target.x) * camera.zoom + camera.offset.x, grid_scale);
+        var y: f32 = @mod((-camera.target.y) * camera.zoom + camera.offset.y, grid_scale);
+
+        const color = rl.Color.white.alpha(@sqrt(grid_scale / screen_grid_size_max));
+
+        const width: f32 = @floatFromInt(rl.getScreenWidth());
+        const height: f32 = @floatFromInt(rl.getScreenHeight());
+
+        while (x < width) : (x += grid_scale) {
+            rl.drawLineV(.init(x, 0), .init(x, height), color);
+        }
+        while (y < height) : (y += grid_scale) {
+            rl.drawLineV(.init(0, y), .init(width, y), color);
+        }
+    }
 }

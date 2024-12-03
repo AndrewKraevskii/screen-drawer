@@ -25,6 +25,8 @@ pub const config = struct {
         pub const enable_cursor_trail = .{ rl.KeyboardKey.key_t };
         pub const change_brightness   = .{ rl.KeyboardKey.key_b };
         pub const save                = .{ rl.KeyboardKey.key_s };
+        pub const grid                = .{ rl.KeyboardKey.key_g };
+        pub const reset_canvas        = .{ rl.KeyboardKey.key_r };
         // zig fmt: on
 
         comptime {

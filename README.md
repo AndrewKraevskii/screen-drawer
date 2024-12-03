@@ -4,7 +4,7 @@
 ![image](https://github.com/user-attachments/assets/b615b390-e052-454c-818d-2f139788bb91)
 
 ## How to build.
-Download zig 0.13.0 https://ziglang.org/download/
+Download zig master at least version 0.14.0-dev.2316 https://ziglang.org/download/
 ```sh
 git clone git@github.com:AndrewKraevskii/screen-drawer.git
 zig build
@@ -29,7 +29,7 @@ It stores images in default location for apps to store data on your OS.
 - [ ] Figure out file format versioning
 - [ ] Do some testing
 - [ ] Support of image importing using clipboard
-- [ ] Draw grid
+- [x] Draw grid
 - [x] Since it's now vector format do infinite canvas
 - [ ] Export canvases
 - [ ] Regular drawing board mode?
