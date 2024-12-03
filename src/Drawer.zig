@@ -197,7 +197,10 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
 
     const canvas = canvas: { // load canvas
         const file_zone = tracy.initZone(@src(), .{ .name = "Open file" });
-        var file = try dir.openFile(config.save_file_name, .{});
+        var file = dir.openFile(config.save_file_name, .{}) catch |err| switch (err) {
+            error.FileNotFound => break :canvas Canvas.init,
+            else => return err,
+        };
         file_zone.deinit();
         defer file.close();
 
@@ -207,7 +210,7 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
         break :canvas Canvas.load(gpa, reader) catch |e| {
             std.log.err("Can't load file {s}", .{@errorName(e)});
 
-            break :canvas Canvas{};
+            break :canvas Canvas.init;
         };
     };
 

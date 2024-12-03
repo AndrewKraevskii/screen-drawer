@@ -46,18 +46,25 @@ const Span = struct {
     size: u64,
 };
 
-strokes: std.ArrayListUnmanaged(Stroke) = .{},
-segments: std.ArrayListUnmanaged([2]f32) = .{},
-history: History = .{},
-camera: rl.Camera2D = .{
-    .zoom = 1,
-    .target = .{ .x = 0, .y = 0 },
-    .offset = .init(
-        @floatFromInt(@divFloor(1000, 2)),
-        @floatFromInt(@divFloor(1000, 2)),
-    ),
-    .rotation = 0,
-},
+strokes: std.ArrayListUnmanaged(Stroke),
+segments: std.ArrayListUnmanaged([2]f32),
+history: History,
+camera: rl.Camera2D,
+
+pub const init: Canvas = .{
+    .strokes = .{},
+    .segments = .{},
+    .history = .{},
+    .camera = .{
+        .zoom = 1,
+        .target = .{ .x = 0, .y = 0 },
+        .offset = .init(
+            @floatFromInt(@divFloor(1000, 2)),
+            @floatFromInt(@divFloor(1000, 2)),
+        ),
+        .rotation = 0,
+    },
+};
 
 pub fn startStroke(
     canvas: *@This(),
@@ -151,7 +158,7 @@ pub fn load(gpa: std.mem.Allocator, reader: anytype) !Canvas {
     try reader.readNoEof(&buf); // magic
     if (!std.mem.eql(u8, &buf, config.save_format_magic)) return error.MagicNotFound;
 
-    var canvas = Canvas{};
+    var canvas: Canvas = .init;
     errdefer canvas.deinit(gpa);
 
     inline for (.{ "segments", "strokes" }) |field| {
