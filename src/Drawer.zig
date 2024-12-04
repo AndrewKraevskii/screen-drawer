@@ -418,6 +418,20 @@ fn tick(self: *Drawer) !void {
         }
         if (isDown(key_bindings.drag)) {
             self.canvas.camera.target = self.canvas.camera.target.subtract(rl.getMouseDelta().scale(1 / self.canvas.camera.zoom));
+
+            const board_padding = 100000000;
+            if (self.canvas.camera.target.x < -board_padding) {
+                self.canvas.camera.target.x = -board_padding;
+            }
+            if (self.canvas.camera.target.y < -board_padding) {
+                self.canvas.camera.target.y = -board_padding;
+            }
+            if (self.canvas.camera.target.x > board_padding) {
+                self.canvas.camera.target.x = board_padding;
+            }
+            if (self.canvas.camera.target.y > board_padding) {
+                self.canvas.camera.target.y = board_padding;
+            }
         }
         if (isPressedRepeat(key_bindings.undo)) {
             if (self.canvas.history.undo()) |undo_event| {
@@ -430,7 +444,12 @@ fn tick(self: *Drawer) !void {
             }
         }
     }
+
+    const min_zoom = 1.0 / 10000.0;
+    const max_zoom = 0.07;
+
     self.target_zoom *= @exp(rl.getMouseWheelMoveV().y);
+    self.target_zoom = std.math.clamp(self.target_zoom, min_zoom, max_zoom);
     self.canvas.camera.zoom = expDecayWithAnimationSpeed(self.canvas.camera.zoom, self.target_zoom, rl.getFrameTime());
 
     {
