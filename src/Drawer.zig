@@ -436,12 +436,12 @@ fn tick(self: *Drawer) !void {
                 self.canvas.camera.target.y = board_padding;
             }
         }
-        if (isPressedRepeat(key_bindings.undo)) {
+        if (isPressedOrRepeat(key_bindings.undo)) {
             if (self.canvas.history.undo()) |undo_event| {
                 undo_event.undo(&self.canvas);
             }
         }
-        if (isPressedRepeat(key_bindings.redo)) {
+        if (isPressedOrRepeat(key_bindings.redo)) {
             if (self.canvas.history.redo()) |redo_event| {
                 redo_event.redo(&self.canvas);
             }
@@ -451,10 +451,14 @@ fn tick(self: *Drawer) !void {
     const min_zoom = 1.0 / 10000.0;
     const max_zoom = 0.07;
 
-    self.target_zoom *= @exp(rl.getMouseWheelMoveV().y);
-    self.target_zoom = std.math.clamp(self.target_zoom, min_zoom, max_zoom);
-    self.canvas.camera.zoom = expDecayWithAnimationSpeed(self.canvas.camera.zoom, self.target_zoom, rl.getFrameTime());
-
+    { // camera zoom
+        self.target_zoom *= @exp(rl.getMouseWheelMoveV().y);
+        self.target_zoom = std.math.clamp(self.target_zoom, min_zoom, max_zoom);
+        const new_zoom = expDecayWithAnimationSpeed(self.canvas.camera.zoom, self.target_zoom, rl.getFrameTime());
+        self.canvas.camera.target = self.canvas.camera.target.subtract(rl.getMouseDelta().scale(-1 / self.canvas.camera.zoom));
+        self.canvas.camera.offset = rl.getMousePosition();
+        self.canvas.camera.zoom = new_zoom;
+    }
     {
         self.canvas.camera.begin();
         defer self.canvas.camera.end();
@@ -479,7 +483,7 @@ fn tick(self: *Drawer) !void {
                     .height = bounding_box.max[1] - bounding_box.min[1],
                 };
                 if (rl.checkCollisionRecs(camera_rect, ray_rect)) {
-                    rl.drawRectangleLinesEx(ray_rect, config.line_thickness / 2 / self.canvas.camera.zoom, .blue);
+                    rl.drawRectangleLinesEx(ray_rect, config.line_thickness / 2 / self.canvas.camera.zoom, if (!stroke.is_active) .yellow else .blue);
                 }
             }
         }
@@ -654,6 +658,10 @@ fn isPressed(keys_or_buttons: anytype) bool {
     }
 
     return false;
+}
+
+fn isPressedOrRepeat(keys_or_buttons: anytype) bool {
+    return isPressedRepeat(keys_or_buttons) or isPressed(keys_or_buttons);
 }
 
 fn isPressedRepeat(keys_or_buttons: anytype) bool {
