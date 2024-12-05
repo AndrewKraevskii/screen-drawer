@@ -22,9 +22,9 @@ pub const config = struct {
         pub const eraser              = .{ rl.KeyboardKey.key_e };
         pub const drag                = .{ rl.MouseButton.mouse_button_right };
         pub const toggle_keybindings  = .{ rl.KeyboardKey.key_h };
-        pub const enable_cursor_trail = .{ rl.KeyboardKey.key_t };
+        pub const select              = .{ rl.KeyboardKey.key_left_control, rl.MouseButton.mouse_button_left };
         pub const change_brightness   = .{ rl.KeyboardKey.key_b };
-        pub const save                = .{ rl.KeyboardKey.key_s };
+        pub const save                = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_s };
         pub const grid                = .{ rl.KeyboardKey.key_g };
         pub const reset_canvas        = .{ rl.KeyboardKey.key_r };
         // zig fmt: on

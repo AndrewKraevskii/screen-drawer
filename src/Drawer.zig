@@ -20,6 +20,8 @@ brush_state: union(enum) {
     drawing,
     eraser,
     picking_color,
+    selecting,
+    selected,
 },
 
 color_wheel: ColorWheel,
@@ -35,16 +37,14 @@ old_cursor_position: Vec2,
 showing_keybindings: bool = false,
 draw_grid: bool = false,
 
-cursor_trail: OverrideQueue(TrailParticle, 0x100) = .empty,
-cursor_trail_enabled: bool = false,
-drawing_particles: OverrideQueue(DrawingParticle, 0x100) = .empty,
-drawing_particles_enabled: bool = false,
-
 background_color: rl.Color = .blank,
 background_alpha_selector: ?Bar = null,
 
 random: std.Random.DefaultPrng,
 target_zoom: f32,
+
+start_position: ?Vec2,
+selection: std.ArrayListUnmanaged(u64),
 
 save_directory: std.fs.Dir,
 
@@ -56,107 +56,6 @@ fn getAppDataDirEnsurePathExist(alloc: std.mem.Allocator, appname: []const u8) !
         else => |err| return err,
     };
     return data_dir_path;
-}
-
-fn addTrailParticle(self: *@This(), pos: Vec2) void {
-    const zone = tracy.initZone(@src(), .{});
-    defer zone.deinit();
-
-    self.cursor_trail.add(.{
-        .pos = pos,
-        .time_to_live = 0.2,
-        .size = self.brush.radius,
-    });
-}
-
-fn updateTrail(self: *@This()) void {
-    const zone = tracy.initZone(@src(), .{});
-    defer zone.deinit();
-
-    inline for (self.cursor_trail.orderedSlices()) |slice| {
-        for (slice) |*particle| {
-            particle.size *= 0.9;
-            particle.time_to_live -= rl.getFrameTime();
-        }
-    }
-}
-
-fn drawTrail(self: *@This()) void {
-    const zone = tracy.initZone(@src(), .{});
-    defer zone.deinit();
-
-    if (self.cursor_trail.count == 0) return;
-    var prev: ?TrailParticle = null;
-    inline for (self.cursor_trail.orderedSlices()) |slice| {
-        for (slice) |*particle| {
-            if (particle.time_to_live < 0) continue;
-            if (prev == null) {
-                prev = particle.*;
-                continue;
-            }
-            defer prev = particle.*;
-            rl.drawLineEx(@bitCast(particle.pos), @bitCast(prev.?.pos), particle.size * 2, self.brush.color);
-        }
-    }
-}
-
-const TrailParticle = struct {
-    pos: Vec2,
-    size: f32,
-    time_to_live: f32,
-};
-
-const DrawingParticle = struct {
-    pos: Vec2,
-    size: f32,
-    velocity: Vec2,
-    acceleration: Vec2,
-    time_to_live: f32,
-};
-
-fn addDrawingParticle(self: *@This(), pos: Vec2) void {
-    const zone = tracy.initZone(@src(), .{});
-    defer zone.deinit();
-
-    self.drawing_particles.add(.{
-        .pos = pos,
-        .velocity = .{
-            (self.random.random().float(f32) - 0.5) * 100,
-            (self.random.random().float(f32) - 0.5) * 100,
-        },
-        .acceleration = .{
-            0,
-            0,
-        },
-        .size = 3,
-        .time_to_live = 0.5,
-    });
-}
-
-fn updateDrawingParticle(self: *@This()) void {
-    const zone = tracy.initZone(@src(), .{});
-    defer zone.deinit();
-
-    inline for (self.drawing_particles.orderedSlices()) |slice| {
-        for (slice) |*particle| {
-            particle.time_to_live -= rl.getFrameTime();
-            particle.pos = particle.pos + particle.velocity * @as(Vec2, @splat(@floatCast(rl.getFrameTime())));
-            particle.velocity = particle.velocity + particle.acceleration * @as(Vec2, @splat(@floatCast(rl.getFrameTime())));
-            particle.time_to_live -= rl.getFrameTime();
-        }
-    }
-}
-
-fn drawDrawingParticles(self: *@This()) void {
-    const zone = tracy.initZone(@src(), .{});
-    defer zone.deinit();
-
-    inline for (self.drawing_particles.orderedSlices()) |slice| {
-        for (slice) |*particle| {
-            if (particle.time_to_live < 0) continue;
-            rl.drawCircleV(@bitCast(particle.pos), @bitCast(particle.size), .orange);
-        }
-    }
 }
 
 fn debugDrawHistory(history: Canvas.History, pos: Vec2) void {
@@ -217,6 +116,8 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
     };
 
     var drawer: Drawer = .{
+        .start_position = null,
+        .selection = .{},
         .target_zoom = canvas.camera.zoom,
         .gpa = gpa,
         .color_wheel = .{ .center = @splat(0), .size = 0 },
@@ -242,6 +143,7 @@ pub fn deinit(self: *Drawer) void {
     };
     self.save_directory.close();
     self.canvas.deinit(self.gpa);
+    self.selection.deinit(self.gpa);
     rl.closeWindow();
 }
 
@@ -396,14 +298,9 @@ fn tick(self: *Drawer) !void {
 
         if (isPressed(key_bindings.toggle_keybindings)) {
             self.showing_keybindings = !self.showing_keybindings;
-        }
-        if (isPressed(key_bindings.enable_cursor_trail)) {
-            self.cursor_trail_enabled = !self.cursor_trail_enabled;
-        }
-        if (isPressed(key_bindings.grid)) {
+        } else if (isPressed(key_bindings.grid)) {
             self.draw_grid = !self.draw_grid;
-        }
-        if (isPressed(key_bindings.reset_canvas)) {
+        } else if (isPressed(key_bindings.reset_canvas)) {
             self.canvas.deinit(self.gpa);
             self.canvas = .init;
             self.canvas.camera.offset = .init(
@@ -412,27 +309,24 @@ fn tick(self: *Drawer) !void {
             );
             self.target_zoom = self.canvas.camera.zoom;
             std.debug.print("{any}\n", .{self.canvas});
-        }
-        if (isPressed(key_bindings.save)) {
+        } else if (isPressed(key_bindings.save)) {
             try self.save();
             std.log.info("Saved image", .{});
-        }
-        if (isDown(key_bindings.drag)) {
+        } else if (isDown(key_bindings.drag)) {
             self.canvas.camera.target = self.canvas.camera.target.subtract(rl.getMouseDelta().scale(1 / self.canvas.camera.zoom));
-
-            const board_padding = 100000000;
-            if (self.canvas.camera.target.x < -board_padding) {
-                self.canvas.camera.target.x = -board_padding;
-            }
-            if (self.canvas.camera.target.y < -board_padding) {
-                self.canvas.camera.target.y = -board_padding;
-            }
-            if (self.canvas.camera.target.x > board_padding) {
-                self.canvas.camera.target.x = board_padding;
-            }
-            if (self.canvas.camera.target.y > board_padding) {
-                self.canvas.camera.target.y = board_padding;
-            }
+        }
+        const board_padding = 100000000;
+        if (self.canvas.camera.target.x - self.canvas.camera.offset.x / self.canvas.camera.zoom < -board_padding) {
+            self.canvas.camera.target.x = -board_padding + self.canvas.camera.offset.x / self.canvas.camera.zoom;
+        }
+        if (self.canvas.camera.target.y - self.canvas.camera.offset.y / self.canvas.camera.zoom < -board_padding) {
+            self.canvas.camera.target.y = -board_padding + self.canvas.camera.offset.y / self.canvas.camera.zoom;
+        }
+        if (self.canvas.camera.target.x - self.canvas.camera.offset.x / self.canvas.camera.zoom > board_padding) {
+            self.canvas.camera.target.x = board_padding + self.canvas.camera.offset.x / self.canvas.camera.zoom;
+        }
+        if (self.canvas.camera.target.y - self.canvas.camera.offset.y / self.canvas.camera.zoom > board_padding) {
+            self.canvas.camera.target.y = board_padding + self.canvas.camera.offset.y / self.canvas.camera.zoom;
         }
         if (isPressedOrRepeat(key_bindings.undo)) {
             if (self.canvas.history.undo()) |undo_event| {
@@ -481,21 +375,24 @@ fn tick(self: *Drawer) !void {
                     .height = bounding_box.max[1] - bounding_box.min[1],
                 };
                 if (rl.checkCollisionRecs(camera_rect, ray_rect)) {
-                    rl.drawRectangleLinesEx(ray_rect, config.line_thickness / 2 / self.canvas.camera.zoom, if (!stroke.is_active) .yellow else .blue);
+                    // rl.drawRectangleLinesEx(ray_rect, config.line_thickness / 2 / self.canvas.camera.zoom, if (!stroke.is_active) .yellow else .blue);
                 }
             }
         }
     }
 
     self.brush_state = switch (self.brush_state) {
-        .idle => if (isDown(config.key_bindings.draw)) state: {
-            try self.canvas.startStroke(self.gpa, self.brush.color, config.line_thickness / self.canvas.camera.zoom);
-            break :state .drawing;
+        .idle => if (isDown(config.key_bindings.select)) state: {
+            self.start_position = @as(Vec2, @bitCast(rl.getMousePosition()));
+            break :state .selecting;
         } else if (isDown(config.key_bindings.eraser))
             .eraser
         else if (isPressed(config.key_bindings.picking_color)) state: {
             self.color_wheel = .{ .center = cursor_position, .size = 0 };
             break :state .picking_color;
+        } else if (isDown(config.key_bindings.draw)) state: {
+            try self.canvas.startStroke(self.gpa, self.brush.color, config.line_thickness / self.canvas.camera.zoom);
+            break :state .drawing;
         } else .idle,
 
         .drawing => state: {
@@ -528,6 +425,15 @@ fn tick(self: *Drawer) !void {
                 break :state .picking_color;
             };
         },
+        .selecting => if (isDown(config.key_bindings.select))
+            .selecting
+        else blk: {
+            break :blk .selected;
+        },
+        .selected => if (isPressed(config.key_bindings.drag)) blk: {
+            self.selection.clearRetainingCapacity();
+            break :blk .idle;
+        } else .selected,
     };
 
     if (is_debug)
@@ -551,26 +457,90 @@ fn tick(self: *Drawer) !void {
         _ = self.color_wheel.draw(cursor_position);
     }
 
+    // Draw selection
+    if (self.brush_state == .selecting) draw_selection: {
+        std.log.debug("Selection", .{});
+        const start = self.start_position orelse break :draw_selection;
+        const selection_rect: Rectangle = .fromPoints(start, @bitCast(rl.getMousePosition()));
+        const selection_rect_world = selection_rect.toWorld(self.canvas.camera);
+        rl.drawRectangleLinesEx(selection_rect.toRay(), 3, .gray);
+
+        self.canvas.camera.begin();
+        defer self.canvas.camera.end();
+
+        self.selection.clearRetainingCapacity();
+        var mega_bounding_box: ?Canvas.BoundingBox = null;
+        for (self.canvas.strokes.items, 0..) |stroke, index| {
+            if (!stroke.is_active) continue;
+            const bounding_box = self.canvas.calculateBoundingBoxForStroke(stroke);
+            const ray_rect = rl.Rectangle{
+                .x = bounding_box.min[0],
+                .y = bounding_box.min[1],
+                .width = bounding_box.max[0] - bounding_box.min[0],
+                .height = bounding_box.max[1] - bounding_box.min[1],
+            };
+            if (rl.checkCollisionRecs(ray_rect, selection_rect_world.toRay())) {
+                const collision = rl.getCollisionRec(ray_rect, selection_rect_world.toRay());
+                if (std.meta.eql(ray_rect, collision)) {
+                    std.log.debug("Selected", .{});
+                    mega_bounding_box = bounding_box.merge(mega_bounding_box);
+                    rl.drawRectangleLinesEx(collision, config.line_thickness / 2 / self.canvas.camera.zoom, .red);
+                    rl.drawRectangleLinesEx(ray_rect, config.line_thickness / 2 / self.canvas.camera.zoom, .blue);
+                    try self.selection.append(self.gpa, index);
+                }
+            }
+        }
+        if (mega_bounding_box) |bounding_box| {
+            const rect = rl.Rectangle{
+                .x = bounding_box.min[0],
+                .y = bounding_box.min[1],
+                .width = bounding_box.max[0] - bounding_box.min[0],
+                .height = bounding_box.max[1] - bounding_box.min[1],
+            };
+            rl.drawRectangleLinesEx(rect, config.line_thickness / 2 / self.canvas.camera.zoom, .gray);
+        }
+    } else if (self.brush_state == .selected) {
+        self.canvas.camera.begin();
+        defer self.canvas.camera.end();
+
+        var mega_bounding_box: ?Canvas.BoundingBox = null;
+        const diff: Vec2 = @bitCast(rl.getMouseDelta());
+        for (self.selection.items) |selection_index| {
+            const stroke = self.canvas.strokes.items[selection_index];
+            if (isDown(config.key_bindings.draw)) {
+                for (self.canvas.segments.items[stroke.span.start..][0..stroke.span.size]) |*segment| {
+                    segment.* = @as(Vec2, segment.*) + diff * @as(Vec2, @splat(1 / self.canvas.camera.zoom));
+                }
+            }
+            const bounding_box = self.canvas.calculateBoundingBoxForStroke(stroke);
+            mega_bounding_box = bounding_box.merge(mega_bounding_box);
+            const ray_rect = rl.Rectangle{
+                .x = bounding_box.min[0],
+                .y = bounding_box.min[1],
+                .width = bounding_box.max[0] - bounding_box.min[0],
+                .height = bounding_box.max[1] - bounding_box.min[1],
+            };
+            std.log.debug("Selected", .{});
+            rl.drawRectangleLinesEx(ray_rect, config.line_thickness / 2 / self.canvas.camera.zoom, .blue);
+        }
+        if (mega_bounding_box) |bounding_box| {
+            const rect = rl.Rectangle{
+                .x = bounding_box.min[0],
+                .y = bounding_box.min[1],
+                .width = bounding_box.max[0] - bounding_box.min[0],
+                .height = bounding_box.max[1] - bounding_box.min[1],
+            };
+            rl.drawRectangleLinesEx(rect, config.line_thickness / 2 / self.canvas.camera.zoom, .gray);
+        }
+    }
+    std.debug.print("{any}\n", .{self.selection.items});
+
     // Draw mouse
     if (self.brush_state == .eraser) {
         rl.drawCircleLinesV(@bitCast(cursor_position), config.eraser_thickness / 2, self.brush.color);
     } else {
         rl.drawCircleV(@bitCast(cursor_position), self.brush.radius * 2, self.brush.color);
     }
-
-    // Draw trail
-    self.updateTrail();
-    if (self.cursor_trail_enabled) {
-        self.addTrailParticle(@bitCast(cursor_position));
-        self.drawTrail();
-    }
-
-    // Draw sparks
-    self.updateDrawingParticle();
-    if (self.drawing_particles_enabled)
-        if (self.brush_state == .drawing)
-            self.addDrawingParticle(@bitCast(cursor_position));
-    self.drawDrawingParticles();
 
     if (isDown(config.key_bindings.change_brightness)) {
         if (self.background_alpha_selector) |bar| {
@@ -852,9 +822,12 @@ pub fn drawGridScale(camera: rl.Camera2D, zoom: f32) void {
 }
 
 pub fn drawCanvas(canvas: *Canvas) void {
+    // var buffer: [100]u8 = undefined;
+    // _ = buffer; // autofix
+    var counter: u32 = 0;
     const camera_rect = cameraRect(canvas.camera);
     for (canvas.strokes.items) |stroke| {
-        if (stroke.is_active and stroke.span.size >= 2) {
+        if (stroke.is_active and stroke.span.size >= 2 and stroke.width >= 0.25 / canvas.camera.zoom) {
             // TODO: figure out how to draw nicer lines without terrible performance.
             const bounding_box = canvas.calculateBoundingBoxForStroke(stroke);
             const ray_rect = rl.Rectangle{
@@ -863,7 +836,11 @@ pub fn drawCanvas(canvas: *Canvas) void {
                 .width = bounding_box.max[0] - bounding_box.min[0],
                 .height = bounding_box.max[1] - bounding_box.min[1],
             };
+            // const text = std.fmt.bufPrintZ(&buffer, "{d}", .{stroke.width}) catch "???";
+            // rl.drawText(text, @intFromFloat(ray_rect.x), @intFromFloat(ray_rect.y), @intFromFloat(30 / canvas.camera.zoom), .white);
             if (!rl.checkCollisionRecs(camera_rect, ray_rect)) continue;
+
+            counter += 1;
 
             const DrawType = enum {
                 none,
@@ -889,6 +866,8 @@ pub fn drawCanvas(canvas: *Canvas) void {
             }
         }
     }
+    std.debug.print("counter {d}\n", .{counter});
+    tracy.plot(u32, "Strokes drawn", counter);
 }
 
 pub fn cameraRect(camera: rl.Camera2D) rl.Rectangle {

@@ -6,6 +6,7 @@ width: f32,
 height: f32,
 
 const Rectangle = @This();
+const Vec2 = @import("root").Vector2;
 
 pub fn init(x: f32, y: f32, width: f32, height: f32) Rectangle {
     return Rectangle{ .x = x, .y = y, .width = width, .height = height };
@@ -61,6 +62,18 @@ pub fn rectangleSize(rect: Rectangle) rl.Vector2 {
     };
 }
 
+pub fn fromPoints(a: Vec2, b: Vec2) Rectangle {
+    const min = @min(a, b);
+    const max = @max(a, b);
+    const diff = max - min;
+    return .{
+        .x = min[0],
+        .y = min[1],
+        .width = diff[0],
+        .height = diff[1],
+    };
+}
+
 pub fn toRay(rect: Rectangle) rl.Rectangle {
     return .{
         .x = rect.x,
@@ -68,4 +81,24 @@ pub fn toRay(rect: Rectangle) rl.Rectangle {
         .width = rect.width,
         .height = rect.height,
     };
+}
+
+pub fn topLeft(rect: Rectangle) Vec2 {
+    return .{
+        rect.x,
+        rect.y,
+    };
+}
+
+pub fn bottonRight(rect: Rectangle) Vec2 {
+    return .{
+        rect.x + rect.width,
+        rect.y + rect.height,
+    };
+}
+
+pub fn toWorld(rect: Rectangle, camera: rl.Camera2D) Rectangle {
+    const top_left = rl.getScreenToWorld2D(@bitCast(rect.topLeft()), camera);
+    const bottom_right = rl.getScreenToWorld2D(@bitCast(rect.bottonRight()), camera);
+    return .fromPoints(@bitCast(top_left), @bitCast(bottom_right));
 }

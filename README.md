@@ -29,6 +29,7 @@ It stores images in default location for apps to store data on your OS.
 - [ ] Figure out file format versioning
 - [ ] Do some testing
 - [ ] Support of image importing using clipboard
+- [x] Use bounding boxes to not draw strokes not in view
 - [x] Draw grid
 - [x] Since it's now vector format do infinite canvas
 - [ ] Export canvases

@@ -1,7 +1,7 @@
 const std = @import("std");
 
-/// Datastrcucture what supports only add operation
-/// and overwriteds oldest element if overflows.
+// Data Structure what supports only add operation and overwrite oldest element if overflows.
+
 pub fn OverrideQueue(comptime T: type, comptime size: usize) type {
     return struct {
         buf: [size]T,

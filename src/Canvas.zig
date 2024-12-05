@@ -10,9 +10,14 @@ const main = @import("main.zig");
 const config = main.config;
 const Vector2 = main.Vector2;
 
+pub const History = HistoryStorage(EventTypes);
+
 const Canvas = @This();
 
-pub const History = HistoryStorage(EventTypes);
+strokes: std.ArrayListUnmanaged(Stroke),
+segments: std.ArrayListUnmanaged([2]f32),
+history: History,
+camera: rl.Camera2D,
 
 const EventTypes = union(enum) {
     drawn: usize,
@@ -34,9 +39,17 @@ const EventTypes = union(enum) {
     }
 };
 
-const BoundingBox = struct {
+pub const BoundingBox = struct {
     min: Vector2,
     max: Vector2,
+
+    pub fn merge(self: BoundingBox, other: ?BoundingBox) BoundingBox {
+        if (other == null) return self;
+        return .{
+            .min = @min(self.min, other.?.min),
+            .max = @max(self.max, other.?.max),
+        };
+    }
 };
 
 pub fn calculateBoundingBoxForStroke(canvas: Canvas, stroke: Canvas.Stroke) BoundingBox {
@@ -65,11 +78,6 @@ const Span = extern struct {
     start: u64,
     size: u64,
 };
-
-strokes: std.ArrayListUnmanaged(Stroke),
-segments: std.ArrayListUnmanaged([2]f32),
-history: History,
-camera: rl.Camera2D,
 
 pub const init: Canvas = .{
     .strokes = .{},
@@ -104,12 +112,12 @@ pub fn startStroke(
     });
 }
 
-pub fn addStrokePoint(canvas: *@This(), gpa: std.mem.Allocator, pos: [2]f32, min_distance: f32) error{OutOfMemory}!void {
+fn addStrokePointRaw(canvas: *@This(), gpa: std.mem.Allocator, pos: [2]f32, min_distance: f32) error{OutOfMemory}!void {
     std.debug.assert(canvas.strokes.items.len != 0);
     // if previous segment is to small update it instead of adding new.
     // const min_distance = 10;
     const min_distance_squared = min_distance * min_distance;
-    if (canvas.strokes.items[canvas.strokes.items.len - 1].span.size >= 1 and canvas.segments.items.len >= 2) {
+    if (canvas.strokes.items[canvas.strokes.items.len - 1].span.size >= 2 and canvas.segments.items.len >= 2) {
         const start: Vector2 = canvas.segments.items[canvas.segments.items.len - 2];
         const end: Vector2 = canvas.segments.items[canvas.segments.items.len - 1];
         if (@reduce(.Add, (start - end) * (start - end)) < min_distance_squared) {
@@ -124,6 +132,26 @@ pub fn addStrokePoint(canvas: *@This(), gpa: std.mem.Allocator, pos: [2]f32, min
     try canvas.segments.append(
         gpa,
         pos,
+    );
+}
+
+pub fn addStrokePoint(canvas: *@This(), gpa: std.mem.Allocator, pos: [2]f32, min_distance: f32) error{OutOfMemory}!void {
+    const last_stroke = &canvas.strokes.items[canvas.strokes.items.len - 1];
+    if (last_stroke.span.size > 50) {
+        try addStrokePointRaw(
+            canvas,
+            gpa,
+            pos,
+            0,
+        );
+        try canvas.startStroke(gpa, last_stroke.color, last_stroke.width);
+    }
+
+    try addStrokePointRaw(
+        canvas,
+        gpa,
+        pos,
+        min_distance,
     );
 }
 
