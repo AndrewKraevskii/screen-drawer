@@ -34,14 +34,14 @@ const EventTypes = union(enum) {
     }
 };
 
-const Stroke = struct {
+const Stroke = extern struct {
     is_active: bool = true,
     span: Span,
     color: rl.Color,
     width: f32,
 };
 
-const Span = struct {
+const Span = extern struct {
     start: u64,
     size: u64,
 };
@@ -172,7 +172,19 @@ pub fn load(gpa: std.mem.Allocator, reader: anytype) !Canvas {
         try reader.readNoEof(std.mem.sliceAsBytes(canvas.history.events.items));
     }
     try reader.readNoEof(std.mem.asBytes(&canvas.camera));
+
+    try integrityCheck(&canvas);
+
     return canvas;
+}
+
+pub fn integrityCheck(canvas: *Canvas) !void {
+    const number_of_strokes = canvas.segments.items.len;
+    for (canvas.strokes.items) |segment| {
+        if (segment.is_active and number_of_strokes <= segment.span.start +| segment.span.size) {
+            return error.SpanPointsToFar;
+        }
+    }
 }
 
 pub fn deinit(canvas: *Canvas, gpa: std.mem.Allocator) void {
