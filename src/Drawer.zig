@@ -188,6 +188,7 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
     });
     rl.setTraceLogLevel(if (is_debug) .log_debug else .log_warning);
     rl.initWindow(0, 0, config.app_name);
+
     errdefer rl.closeWindow();
 
     const dir_path = try getAppDataDirEnsurePathExist(gpa, config.save_folder_name);
@@ -353,6 +354,8 @@ pub fn run(self: *Drawer) !void {
     while (!(rl.windowShouldClose() or
         (config.exit_on_unfocus and !rl.isWindowFocused())))
     {
+        const zone = tracy.initZone(@src(), .{ .name = "Tick" });
+        defer zone.deinit();
         tracy.frameMark();
         try tick(self);
     }
@@ -453,35 +456,30 @@ fn tick(self: *Drawer) !void {
     self.canvas.camera.zoom = expDecayWithAnimationSpeed(self.canvas.camera.zoom, self.target_zoom, rl.getFrameTime());
 
     {
-        const zone = tracy.initZone(@src(), .{ .name = "Line drawing" });
-        defer zone.deinit();
-
         self.canvas.camera.begin();
         defer self.canvas.camera.end();
+        {
+            const zone = tracy.initZone(@src(), .{ .name = "Line drawing" });
+            defer zone.deinit();
 
-        for (self.canvas.strokes.items) |stroke| {
-            if (stroke.is_active and stroke.span.size >= 2) {
-                const DrawType = enum {
-                    none,
-                    linear,
-                    catmull_rom,
+            drawCanvas(&self.canvas);
+        }
+
+        {
+            const zone = tracy.initZone(@src(), .{ .name = "Draw bounding box" });
+            defer zone.deinit();
+
+            const camera_rect = cameraRect(self.canvas.camera);
+            for (self.canvas.strokes.items) |stroke| {
+                const bounding_box = self.canvas.calculateBoundingBoxForStroke(stroke);
+                const ray_rect = rl.Rectangle{
+                    .x = bounding_box.min[0],
+                    .y = bounding_box.min[1],
+                    .width = bounding_box.max[0] - bounding_box.min[0],
+                    .height = bounding_box.max[1] - bounding_box.min[1],
                 };
-                const draw_type: DrawType =
-                    if (stroke.span.size < 4 or 1 / self.canvas.camera.zoom > stroke.width) .linear else .catmull_rom;
-                switch (draw_type) {
-                    .none => continue,
-                    .linear => rl.drawSplineLinear(
-                        @ptrCast(self.canvas.segments.items[stroke.span.start..][0..stroke.span.size]),
-                        stroke.width,
-                        stroke.color,
-                    ),
-                    .catmull_rom => {
-                        rl.drawSplineCatmullRom(
-                            @ptrCast(self.canvas.segments.items[stroke.span.start..][0..stroke.span.size]),
-                            stroke.width,
-                            stroke.color,
-                        );
-                    },
+                if (rl.checkCollisionRecs(camera_rect, ray_rect)) {
+                    rl.drawRectangleLinesEx(ray_rect, config.line_thickness / 2 / self.canvas.camera.zoom, .blue);
                 }
             }
         }
@@ -538,6 +536,8 @@ fn tick(self: *Drawer) !void {
 
     // Draw grid
     if (self.draw_grid) {
+        const zone = tracy.initZone(@src(), .{ .name = "Draw grid" });
+        defer zone.deinit();
         for (0..8) |i| {
             drawGridScale(self.canvas.camera, std.math.pow(f32, 10, @floatFromInt(i)));
         }
@@ -602,6 +602,8 @@ fn tick(self: *Drawer) !void {
     if (@import("builtin").mode == .Debug)
         rl.drawFPS(0, 0);
 
+    const zone = tracy.initZone(@src(), .{ .name = "End drawing" });
+    defer zone.deinit();
     rl.endDrawing();
 }
 
@@ -841,4 +843,53 @@ pub fn drawGridScale(camera: rl.Camera2D, zoom: f32) void {
             rl.drawLineV(.init(0, y), .init(width, y), color);
         }
     }
+}
+
+pub fn drawCanvas(canvas: *Canvas) void {
+    const camera_rect = cameraRect(canvas.camera);
+    for (canvas.strokes.items) |stroke| {
+        if (stroke.is_active and stroke.span.size >= 2) {
+            // TODO: figure out how to draw nicer lines without terrible performance.
+            const bounding_box = canvas.calculateBoundingBoxForStroke(stroke);
+            const ray_rect = rl.Rectangle{
+                .x = bounding_box.min[0],
+                .y = bounding_box.min[1],
+                .width = bounding_box.max[0] - bounding_box.min[0],
+                .height = bounding_box.max[1] - bounding_box.min[1],
+            };
+            if (!rl.checkCollisionRecs(camera_rect, ray_rect)) continue;
+
+            const DrawType = enum {
+                none,
+                linear,
+                catmull_rom,
+            };
+            const draw_type: DrawType = .linear;
+            // if (stroke.span.size < 4 or 1 / canvas.camera.zoom > stroke.width) .linear else .catmull_rom;
+            switch (draw_type) {
+                .none => continue,
+                .linear => rl.drawSplineLinear(
+                    @ptrCast(canvas.segments.items[stroke.span.start..][0..stroke.span.size]),
+                    stroke.width,
+                    stroke.color,
+                ),
+                .catmull_rom => {
+                    rl.drawSplineCatmullRom(
+                        @ptrCast(canvas.segments.items[stroke.span.start..][0..stroke.span.size]),
+                        stroke.width,
+                        stroke.color,
+                    );
+                },
+            }
+        }
+    }
+}
+
+pub fn cameraRect(camera: rl.Camera2D) rl.Rectangle {
+    return .{
+        .x = camera.target.x - camera.offset.x / camera.zoom,
+        .y = camera.target.y - camera.offset.y / camera.zoom,
+        .width = @as(f32, @floatFromInt(rl.getScreenWidth())) / camera.zoom,
+        .height = @as(f32, @floatFromInt(rl.getScreenHeight())) / camera.zoom,
+    };
 }

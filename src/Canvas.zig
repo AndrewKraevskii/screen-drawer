@@ -34,7 +34,27 @@ const EventTypes = union(enum) {
     }
 };
 
-const Stroke = extern struct {
+const BoundingBox = struct {
+    min: Vector2,
+    max: Vector2,
+};
+
+pub fn calculateBoundingBoxForStroke(canvas: Canvas, stroke: Canvas.Stroke) BoundingBox {
+    var segment_min: Vector2 = @splat(std.math.floatMax(f32));
+    var segment_max: Vector2 = @splat(-std.math.floatMax(f32));
+
+    for (canvas.segments.items[stroke.span.start..][0..stroke.span.size]) |segment| {
+        segment_min = @min(segment_min, @as(Vector2, segment));
+        segment_max = @max(segment_max, @as(Vector2, segment));
+    }
+
+    return .{
+        .min = segment_min,
+        .max = segment_max,
+    };
+}
+
+pub const Stroke = extern struct {
     is_active: bool = true,
     span: Span,
     color: rl.Color,
@@ -179,9 +199,16 @@ pub fn load(gpa: std.mem.Allocator, reader: anytype) !Canvas {
 }
 
 pub fn integrityCheck(canvas: *Canvas) !void {
-    const number_of_strokes = canvas.segments.items.len;
+    const number_of_segments = canvas.segments.items.len;
     for (canvas.strokes.items) |segment| {
-        if (segment.is_active and number_of_strokes <= segment.span.start +| segment.span.size) {
+        if (segment.is_active and
+            number_of_segments < segment.span.start +| segment.span.size)
+        {
+            std.log.err("number of segments: {d}\nspan: {d}-{d}", .{
+                number_of_segments,
+                segment.span.start,
+                segment.span.start +| segment.span.size,
+            });
             return error.SpanPointsToFar;
         }
     }
