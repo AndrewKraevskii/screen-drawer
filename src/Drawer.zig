@@ -230,10 +230,8 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
         .save_directory = dir,
         .canvas = canvas,
     };
-    drawer.canvas.camera.offset = .init(
-        @floatFromInt(@divFloor(rl.getScreenWidth(), 2)),
-        @floatFromInt(@divFloor(rl.getScreenHeight(), 2)),
-    );
+    drawer.canvas.camera.target = drawer.canvas.camera.target.subtract(drawer.canvas.camera.offset.subtract(rl.getMousePosition()).scale(drawer.canvas.camera.zoom));
+    drawer.canvas.camera.offset = rl.getMousePosition();
 
     return drawer;
 }
