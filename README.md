@@ -34,3 +34,4 @@ It stores images in default location for apps to store data on your OS.
 - [x] Since it's now vector format do infinite canvas
 - [ ] Export canvases
 - [ ] Regular drawing board mode?
+- [x] Selecting and dragging drawings
