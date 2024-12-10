@@ -30,7 +30,8 @@ brush: struct {
     color: rl.Color,
 },
 
-canvas: Canvas,
+canvases: std.ArrayListUnmanaged(Canvas),
+selected_canvas: usize,
 old_world_position: Vec2,
 old_cursor_position: Vec2,
 
@@ -47,6 +48,8 @@ start_position: ?Vec2,
 selection: std.ArrayListUnmanaged(u64),
 
 save_directory: std.fs.Dir,
+
+const Canvases = std.ArrayListUnmanaged(Canvas);
 
 fn getAppDataDirEnsurePathExist(alloc: std.mem.Allocator, appname: []const u8) ![]u8 {
     const data_dir_path = try std.fs.getAppDataDir(alloc, appname);
@@ -96,26 +99,35 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
     var dir = try std.fs.openDirAbsolute(dir_path, .{});
     errdefer dir.close();
 
-    const canvas = canvas: { // load canvas
-        const file_zone = tracy.initZone(@src(), .{ .name = "Open file" });
-        var file = dir.openFile(config.save_file_name, .{}) catch |err| switch (err) {
-            error.FileNotFound => break :canvas Canvas.init,
-            else => return err,
+    const canvases = canvases: {
+        var canvas = canvas: { // load canvas
+            const file_zone = tracy.initZone(@src(), .{ .name = "Open file" });
+            var file = dir.openFile(config.save_file_name, .{}) catch |err| switch (err) {
+                error.FileNotFound => break :canvas Canvas.init,
+                else => return err,
+            };
+            file_zone.deinit();
+            defer file.close();
+
+            var br = std.io.bufferedReader(file.reader());
+            const reader = br.reader();
+
+            break :canvas Canvas.load(gpa, reader) catch |e| {
+                std.log.err("Can't load file {s}", .{@errorName(e)});
+
+                break :canvas Canvas.init;
+            };
         };
-        file_zone.deinit();
-        defer file.close();
+        errdefer canvas.deinit(gpa);
 
-        var br = std.io.bufferedReader(file.reader());
-        const reader = br.reader();
-
-        break :canvas Canvas.load(gpa, reader) catch |e| {
-            std.log.err("Can't load file {s}", .{@errorName(e)});
-
-            break :canvas Canvas.init;
-        };
+        var canvases: Canvases = try .initCapacity(gpa, 1);
+        canvases.appendAssumeCapacity(canvas);
+        break :canvases canvases;
     };
+    errdefer canvases.deinit(gpa);
 
-    var drawer: Drawer = .{
+    const canvas = &canvases.items[0];
+    const drawer: Drawer = .{
         .start_position = null,
         .selection = .{},
         .target_zoom = canvas.camera.zoom,
@@ -129,10 +141,14 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
         .brush_state = .idle,
         .random = std.Random.DefaultPrng.init(0),
         .save_directory = dir,
-        .canvas = canvas,
+        .selected_canvas = 0,
+        .canvases = canvases,
     };
-    drawer.canvas.camera.target = drawer.canvas.camera.target.subtract(drawer.canvas.camera.offset.subtract(rl.getMousePosition()).scale(drawer.canvas.camera.zoom));
-    drawer.canvas.camera.offset = rl.getMousePosition();
+    canvas.camera.target =
+        canvas.camera.target.subtract(canvas.camera.offset.subtract(rl.getMousePosition())
+        .scale(canvas.camera.zoom));
+    canvas.camera.offset =
+        rl.getMousePosition();
 
     return drawer;
 }
@@ -142,7 +158,10 @@ pub fn deinit(self: *Drawer) void {
         std.log.err("Failed to save: {s}", .{@errorName(e)});
     };
     self.save_directory.close();
-    self.canvas.deinit(self.gpa);
+    for (self.canvases.items) |*canvas| {
+        canvas.deinit(self.gpa);
+    }
+    self.canvases.deinit(self.gpa);
     self.selection.deinit(self.gpa);
     rl.closeWindow();
 }
@@ -273,22 +292,24 @@ fn save(self: *@This()) !void {
     };
     const writer = bw.writer();
 
-    try self.canvas.save(writer);
+    try self.canvases.items[self.selected_canvas].save(writer);
 }
 
 fn tick(self: *Drawer) !void {
+    const canvas = &self.canvases.items[self.selected_canvas];
+
     var arena = std.heap.ArenaAllocator.init(self.gpa);
     defer arena.deinit();
 
     rl.beginDrawing();
     rl.clearBackground(self.background_color);
 
-    tracy.plot(i64, "history size", @intCast(self.canvas.history.events.items.len));
-    tracy.plot(i64, "strokes size", @intCast(self.canvas.strokes.items.len));
-    tracy.plot(i64, "segments size", @intCast(self.canvas.segments.items.len));
+    tracy.plot(i64, "history size", @intCast(canvas.history.events.items.len));
+    tracy.plot(i64, "strokes size", @intCast(canvas.strokes.items.len));
+    tracy.plot(i64, "segments size", @intCast(canvas.segments.items.len));
 
     const cursor_position: Vec2 = @bitCast(rl.getMousePosition());
-    const world_position: Vec2 = @bitCast(rl.getScreenToWorld2D(rl.getMousePosition(), self.canvas.camera));
+    const world_position: Vec2 = @bitCast(rl.getScreenToWorld2D(rl.getMousePosition(), canvas.camera));
     defer self.old_world_position = world_position;
     defer self.old_cursor_position = cursor_position;
 
@@ -301,41 +322,41 @@ fn tick(self: *Drawer) !void {
         } else if (isPressed(key_bindings.grid)) {
             self.draw_grid = !self.draw_grid;
         } else if (isPressed(key_bindings.reset_canvas)) {
-            self.canvas.deinit(self.gpa);
-            self.canvas = .init;
-            self.canvas.camera.offset = .init(
+            canvas.deinit(self.gpa);
+            canvas.* = .init;
+            canvas.camera.offset = .init(
                 @floatFromInt(@divFloor(rl.getScreenWidth(), 2)),
                 @floatFromInt(@divFloor(rl.getScreenHeight(), 2)),
             );
-            self.target_zoom = self.canvas.camera.zoom;
-            std.debug.print("{any}\n", .{self.canvas});
+            self.target_zoom = canvas.camera.zoom;
+            std.debug.print("{any}\n", .{canvas});
         } else if (isPressed(key_bindings.save)) {
             try self.save();
             std.log.info("Saved image", .{});
         } else if (isDown(key_bindings.drag)) {
-            self.canvas.camera.target = self.canvas.camera.target.subtract(rl.getMouseDelta().scale(1 / self.canvas.camera.zoom));
+            canvas.camera.target = canvas.camera.target.subtract(rl.getMouseDelta().scale(1 / canvas.camera.zoom));
         }
         const board_padding = 100000000;
-        if (self.canvas.camera.target.x - self.canvas.camera.offset.x / self.canvas.camera.zoom < -board_padding) {
-            self.canvas.camera.target.x = -board_padding + self.canvas.camera.offset.x / self.canvas.camera.zoom;
+        if (canvas.camera.target.x - canvas.camera.offset.x / canvas.camera.zoom < -board_padding) {
+            canvas.camera.target.x = -board_padding + canvas.camera.offset.x / canvas.camera.zoom;
         }
-        if (self.canvas.camera.target.y - self.canvas.camera.offset.y / self.canvas.camera.zoom < -board_padding) {
-            self.canvas.camera.target.y = -board_padding + self.canvas.camera.offset.y / self.canvas.camera.zoom;
+        if (canvas.camera.target.y - canvas.camera.offset.y / canvas.camera.zoom < -board_padding) {
+            canvas.camera.target.y = -board_padding + canvas.camera.offset.y / canvas.camera.zoom;
         }
-        if (self.canvas.camera.target.x - self.canvas.camera.offset.x / self.canvas.camera.zoom > board_padding) {
-            self.canvas.camera.target.x = board_padding + self.canvas.camera.offset.x / self.canvas.camera.zoom;
+        if (canvas.camera.target.x - canvas.camera.offset.x / canvas.camera.zoom > board_padding) {
+            canvas.camera.target.x = board_padding + canvas.camera.offset.x / canvas.camera.zoom;
         }
-        if (self.canvas.camera.target.y - self.canvas.camera.offset.y / self.canvas.camera.zoom > board_padding) {
-            self.canvas.camera.target.y = board_padding + self.canvas.camera.offset.y / self.canvas.camera.zoom;
+        if (canvas.camera.target.y - canvas.camera.offset.y / canvas.camera.zoom > board_padding) {
+            canvas.camera.target.y = board_padding + canvas.camera.offset.y / canvas.camera.zoom;
         }
         if (isPressedOrRepeat(key_bindings.undo)) {
-            if (self.canvas.history.undo()) |undo_event| {
-                undo_event.undo(&self.canvas);
+            if (canvas.history.undo()) |undo_event| {
+                undo_event.undo(canvas);
             }
         }
         if (isPressedOrRepeat(key_bindings.redo)) {
-            if (self.canvas.history.redo()) |redo_event| {
-                redo_event.redo(&self.canvas);
+            if (canvas.history.redo()) |redo_event| {
+                redo_event.redo(canvas);
             }
         }
     }
@@ -346,28 +367,28 @@ fn tick(self: *Drawer) !void {
     { // camera zoom
         self.target_zoom *= @exp(rl.getMouseWheelMoveV().y);
         self.target_zoom = std.math.clamp(self.target_zoom, min_zoom, max_zoom);
-        const new_zoom = expDecayWithAnimationSpeed(self.canvas.camera.zoom, self.target_zoom, rl.getFrameTime());
-        self.canvas.camera.target = self.canvas.camera.target.subtract(rl.getMouseDelta().scale(-1 / self.canvas.camera.zoom));
-        self.canvas.camera.offset = rl.getMousePosition();
-        self.canvas.camera.zoom = new_zoom;
+        const new_zoom = expDecayWithAnimationSpeed(canvas.camera.zoom, self.target_zoom, rl.getFrameTime());
+        canvas.camera.target = canvas.camera.target.subtract(rl.getMouseDelta().scale(-1 / canvas.camera.zoom));
+        canvas.camera.offset = rl.getMousePosition();
+        canvas.camera.zoom = new_zoom;
     }
     {
-        self.canvas.camera.begin();
-        defer self.canvas.camera.end();
+        canvas.camera.begin();
+        defer canvas.camera.end();
         {
             const zone = tracy.initZone(@src(), .{ .name = "Line drawing" });
             defer zone.deinit();
 
-            drawCanvas(&self.canvas);
+            drawCanvas(canvas);
         }
 
         {
             const zone = tracy.initZone(@src(), .{ .name = "Draw bounding box" });
             defer zone.deinit();
 
-            const camera_rect = cameraRect(self.canvas.camera);
-            for (self.canvas.strokes.items) |stroke| {
-                const bounding_box = self.canvas.calculateBoundingBoxForStroke(stroke);
+            const camera_rect = cameraRect(canvas.camera);
+            for (canvas.strokes.items) |stroke| {
+                const bounding_box = canvas.calculateBoundingBoxForStroke(stroke);
                 const ray_rect = rl.Rectangle{
                     .x = bounding_box.min[0],
                     .y = bounding_box.min[1],
@@ -375,7 +396,7 @@ fn tick(self: *Drawer) !void {
                     .height = bounding_box.max[1] - bounding_box.min[1],
                 };
                 if (rl.checkCollisionRecs(camera_rect, ray_rect)) {
-                    // rl.drawRectangleLinesEx(ray_rect, config.line_thickness / 2 / self.canvas.camera.zoom, if (!stroke.is_active) .yellow else .blue);
+                    // rl.drawRectangleLinesEx(ray_rect, config.line_thickness / 2 / canvas.camera.zoom, if (!stroke.is_active) .yellow else .blue);
                 }
             }
         }
@@ -391,15 +412,15 @@ fn tick(self: *Drawer) !void {
             self.color_wheel = .{ .center = cursor_position, .size = 0 };
             break :state .picking_color;
         } else if (isDown(config.key_bindings.draw)) state: {
-            try self.canvas.startStroke(self.gpa, self.brush.color, config.line_thickness / self.canvas.camera.zoom);
+            try canvas.startStroke(self.gpa, self.brush.color, config.line_thickness / canvas.camera.zoom);
             break :state .drawing;
         } else .idle,
 
         .drawing => state: {
-            try self.canvas.addStrokePoint(
+            try canvas.addStrokePoint(
                 self.gpa,
                 @bitCast(world_position),
-                self.canvas.camera.zoom,
+                canvas.camera.zoom,
             );
             break :state if (isDown(config.key_bindings.draw))
                 .drawing
@@ -408,7 +429,7 @@ fn tick(self: *Drawer) !void {
         },
         .eraser => state: {
             const radius = config.eraser_thickness / 2;
-            try self.canvas.erase(self.gpa, self.old_world_position, world_position, radius);
+            try canvas.erase(self.gpa, self.old_world_position, world_position, radius);
 
             break :state if (isDown(config.key_bindings.eraser)) .eraser else .idle;
         },
@@ -437,7 +458,7 @@ fn tick(self: *Drawer) !void {
     };
 
     if (is_debug)
-        debugDrawHistory(self.canvas.history, .{
+        debugDrawHistory(canvas.history, .{
             20,
             10,
         });
@@ -447,7 +468,7 @@ fn tick(self: *Drawer) !void {
         const zone = tracy.initZone(@src(), .{ .name = "Draw grid" });
         defer zone.deinit();
         for (0..8) |i| {
-            drawGridScale(self.canvas.camera, std.math.pow(f32, 10, @floatFromInt(i)));
+            drawGridScale(canvas.camera, std.math.pow(f32, 10, @floatFromInt(i)));
         }
     }
 
@@ -462,17 +483,17 @@ fn tick(self: *Drawer) !void {
         std.log.debug("Selection", .{});
         const start = self.start_position orelse break :draw_selection;
         const selection_rect: Rectangle = .fromPoints(start, @bitCast(rl.getMousePosition()));
-        const selection_rect_world = selection_rect.toWorld(self.canvas.camera);
+        const selection_rect_world = selection_rect.toWorld(canvas.camera);
         rl.drawRectangleLinesEx(selection_rect.toRay(), 3, .gray);
 
-        self.canvas.camera.begin();
-        defer self.canvas.camera.end();
+        canvas.camera.begin();
+        defer canvas.camera.end();
 
         self.selection.clearRetainingCapacity();
         var mega_bounding_box: ?Canvas.BoundingBox = null;
-        for (self.canvas.strokes.items, 0..) |stroke, index| {
+        for (canvas.strokes.items, 0..) |stroke, index| {
             if (!stroke.is_active) continue;
-            const bounding_box = self.canvas.calculateBoundingBoxForStroke(stroke);
+            const bounding_box = canvas.calculateBoundingBoxForStroke(stroke);
             const ray_rect = rl.Rectangle{
                 .x = bounding_box.min[0],
                 .y = bounding_box.min[1],
@@ -484,8 +505,8 @@ fn tick(self: *Drawer) !void {
                 if (std.meta.eql(ray_rect, collision)) {
                     std.log.debug("Selected", .{});
                     mega_bounding_box = bounding_box.merge(mega_bounding_box);
-                    rl.drawRectangleLinesEx(collision, config.line_thickness / 2 / self.canvas.camera.zoom, .red);
-                    rl.drawRectangleLinesEx(ray_rect, config.line_thickness / 2 / self.canvas.camera.zoom, .blue);
+                    rl.drawRectangleLinesEx(collision, config.line_thickness / 2 / canvas.camera.zoom, .red);
+                    rl.drawRectangleLinesEx(ray_rect, config.line_thickness / 2 / canvas.camera.zoom, .blue);
                     try self.selection.append(self.gpa, index);
                 }
             }
@@ -497,22 +518,22 @@ fn tick(self: *Drawer) !void {
                 .width = bounding_box.max[0] - bounding_box.min[0],
                 .height = bounding_box.max[1] - bounding_box.min[1],
             };
-            rl.drawRectangleLinesEx(rect, config.line_thickness / 2 / self.canvas.camera.zoom, .gray);
+            rl.drawRectangleLinesEx(rect, config.line_thickness / 2 / canvas.camera.zoom, .gray);
         }
     } else if (self.brush_state == .selected) {
-        self.canvas.camera.begin();
-        defer self.canvas.camera.end();
+        canvas.camera.begin();
+        defer canvas.camera.end();
 
         var mega_bounding_box: ?Canvas.BoundingBox = null;
         const diff: Vec2 = @bitCast(rl.getMouseDelta());
         for (self.selection.items) |selection_index| {
-            const stroke = self.canvas.strokes.items[selection_index];
+            const stroke = canvas.strokes.items[selection_index];
             if (isDown(config.key_bindings.draw)) {
-                for (self.canvas.segments.items[stroke.span.start..][0..stroke.span.size]) |*segment| {
-                    segment.* = @as(Vec2, segment.*) + diff * @as(Vec2, @splat(1 / self.canvas.camera.zoom));
+                for (canvas.segments.items[stroke.span.start..][0..stroke.span.size]) |*segment| {
+                    segment.* = @as(Vec2, segment.*) + diff * @as(Vec2, @splat(1 / canvas.camera.zoom));
                 }
             }
-            const bounding_box = self.canvas.calculateBoundingBoxForStroke(stroke);
+            const bounding_box = canvas.calculateBoundingBoxForStroke(stroke);
             mega_bounding_box = bounding_box.merge(mega_bounding_box);
             const ray_rect = rl.Rectangle{
                 .x = bounding_box.min[0],
@@ -521,7 +542,7 @@ fn tick(self: *Drawer) !void {
                 .height = bounding_box.max[1] - bounding_box.min[1],
             };
             std.log.debug("Selected", .{});
-            rl.drawRectangleLinesEx(ray_rect, config.line_thickness / 2 / self.canvas.camera.zoom, .blue);
+            rl.drawRectangleLinesEx(ray_rect, config.line_thickness / 2 / canvas.camera.zoom, .blue);
         }
         if (mega_bounding_box) |bounding_box| {
             const rect = rl.Rectangle{
@@ -530,7 +551,7 @@ fn tick(self: *Drawer) !void {
                 .width = bounding_box.max[0] - bounding_box.min[0],
                 .height = bounding_box.max[1] - bounding_box.min[1],
             };
-            rl.drawRectangleLinesEx(rect, config.line_thickness / 2 / self.canvas.camera.zoom, .gray);
+            rl.drawRectangleLinesEx(rect, config.line_thickness / 2 / canvas.camera.zoom, .gray);
         }
     }
     std.debug.print("{any}\n", .{self.selection.items});
@@ -558,14 +579,14 @@ fn tick(self: *Drawer) !void {
 
         var buffer: [std.fmt.count(fmt_string, .{std.math.floatMax(f32)}) + 100]u8 = undefined;
         {
-            const str = try std.fmt.bufPrintZ(&buffer, fmt_string, .{@log(self.canvas.camera.zoom)});
+            const str = try std.fmt.bufPrintZ(&buffer, fmt_string, .{@log(canvas.camera.zoom)});
             rl.drawText(str, 40, 10, 50, .white);
         }
         {
-            const str = try std.fmt.bufPrintZ(&buffer, fmt_string, .{1 / self.canvas.camera.zoom});
+            const str = try std.fmt.bufPrintZ(&buffer, fmt_string, .{1 / canvas.camera.zoom});
             rl.drawText(str, 40, 70, 50, .white);
         }
-        const str = try std.fmt.allocPrintZ(arena.allocator(), "position: {d}x,{d}y", .{ self.canvas.camera.target.x, self.canvas.camera.target.y });
+        const str = try std.fmt.allocPrintZ(arena.allocator(), "position: {d}x,{d}y", .{ canvas.camera.target.x, canvas.camera.target.y });
         rl.drawText(str, 40, 130, 50, .white);
     }
     if (self.showing_keybindings) {
