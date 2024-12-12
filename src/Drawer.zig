@@ -30,7 +30,7 @@ brush: struct {
     color: rl.Color,
 },
 
-canvases: std.ArrayListUnmanaged(Canvas),
+canvases: Canvases,
 selected_canvas: usize,
 old_world_position: Vec2,
 old_cursor_position: Vec2,
@@ -100,28 +100,34 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
     errdefer dir.close();
 
     const canvases = canvases: {
-        var canvas = canvas: { // load canvas
-            const file_zone = tracy.initZone(@src(), .{ .name = "Open file" });
-            var file = dir.openFile(config.save_file_name, .{}) catch |err| switch (err) {
-                error.FileNotFound => break :canvas Canvas.init,
-                else => return err,
-            };
-            file_zone.deinit();
-            defer file.close();
-
-            var br = std.io.bufferedReader(file.reader());
-            const reader = br.reader();
-
-            break :canvas Canvas.load(gpa, reader) catch |e| {
-                std.log.err("Can't load file {s}", .{@errorName(e)});
-
-                break :canvas Canvas.init;
-            };
-        };
-        errdefer canvas.deinit(gpa);
-
         var canvases: Canvases = try .initCapacity(gpa, 1);
-        canvases.appendAssumeCapacity(canvas);
+        errdefer canvases.deinit(gpa);
+
+        if (true) {
+            const canvas = canvas: { // load canvas
+                const file_zone = tracy.initZone(@src(), .{ .name = "Open file" });
+                var file = dir.openFile(config.save_file_name, .{}) catch |err| switch (err) {
+                    error.FileNotFound => break :canvas Canvas.init,
+                    else => return err,
+                };
+                file_zone.deinit();
+                defer file.close();
+
+                var br = std.io.bufferedReader(file.reader());
+                const reader = br.reader();
+
+                break :canvas Canvas.load(gpa, reader) catch |e| {
+                    std.log.err("Can't load file {s}", .{@errorName(e)});
+
+                    break :canvas Canvas.init;
+                };
+            };
+            canvases.appendAssumeCapacity(canvas);
+        }
+
+        errdefer for (canvases.items) |canvas| {
+            canvas.deinit(gpa);
+        };
         break :canvases canvases;
     };
     errdefer canvases.deinit(gpa);
@@ -133,9 +139,7 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
         .target_zoom = canvas.camera.zoom,
         .gpa = gpa,
         .color_wheel = .{ .center = @splat(0), .size = 0 },
-        .brush = .{
-            .color = rl.Color.red,
-        },
+        .brush = .{ .color = rl.Color.red },
         .old_world_position = @bitCast(rl.getScreenToWorld2D(rl.getMousePosition(), canvas.camera)),
         .old_cursor_position = @bitCast(rl.getMousePosition()),
         .brush_state = .idle,
@@ -322,6 +326,7 @@ fn tick(self: *Drawer) !void {
         } else if (isPressed(key_bindings.grid)) {
             self.draw_grid = !self.draw_grid;
         } else if (isPressed(key_bindings.reset_canvas)) {
+            self.selection.clearRetainingCapacity();
             canvas.deinit(self.gpa);
             canvas.* = .init;
             canvas.camera.offset = .init(
@@ -337,18 +342,10 @@ fn tick(self: *Drawer) !void {
             canvas.camera.target = canvas.camera.target.subtract(rl.getMouseDelta().scale(1 / canvas.camera.zoom));
         }
         const board_padding = 100000000;
-        if (canvas.camera.target.x - canvas.camera.offset.x / canvas.camera.zoom < -board_padding) {
-            canvas.camera.target.x = -board_padding + canvas.camera.offset.x / canvas.camera.zoom;
-        }
-        if (canvas.camera.target.y - canvas.camera.offset.y / canvas.camera.zoom < -board_padding) {
-            canvas.camera.target.y = -board_padding + canvas.camera.offset.y / canvas.camera.zoom;
-        }
-        if (canvas.camera.target.x - canvas.camera.offset.x / canvas.camera.zoom > board_padding) {
-            canvas.camera.target.x = board_padding + canvas.camera.offset.x / canvas.camera.zoom;
-        }
-        if (canvas.camera.target.y - canvas.camera.offset.y / canvas.camera.zoom > board_padding) {
-            canvas.camera.target.y = board_padding + canvas.camera.offset.y / canvas.camera.zoom;
-        }
+        clampCameraPosition(
+            &canvas.camera,
+            board_padding,
+        );
         if (isPressedOrRepeat(key_bindings.undo)) {
             if (canvas.history.undo()) |undo_event| {
                 undo_event.undo(canvas);
@@ -429,7 +426,11 @@ fn tick(self: *Drawer) !void {
         },
         .eraser => state: {
             const radius = config.eraser_thickness / 2;
+            std.log.debug("eraser strokes {d}", .{canvas.strokes.items.len});
+            std.log.debug("eraser segments {d}", .{canvas.segments.items.len});
             try canvas.erase(self.gpa, self.old_world_position, world_position, radius);
+            std.log.debug("eraser strokes {d}", .{canvas.strokes.items.len});
+            std.log.debug("eraser segments {d}", .{canvas.segments.items.len});
 
             break :state if (isDown(config.key_bindings.eraser)) .eraser else .idle;
         },
@@ -527,6 +528,8 @@ fn tick(self: *Drawer) !void {
         var mega_bounding_box: ?Canvas.BoundingBox = null;
         const diff: Vec2 = @bitCast(rl.getMouseDelta());
         for (self.selection.items) |selection_index| {
+            std.log.debug("strokes {d}", .{canvas.strokes.items.len});
+            std.log.debug("segments {d}", .{canvas.segments.items.len});
             const stroke = canvas.strokes.items[selection_index];
             if (isDown(config.key_bindings.draw)) {
                 for (canvas.segments.items[stroke.span.start..][0..stroke.span.size]) |*segment| {
@@ -808,10 +811,6 @@ const Bar = struct {
     }
 };
 
-fn expDecay(a: anytype, b: @TypeOf(a), lambda: @TypeOf(a), dt: @TypeOf(a)) @TypeOf(a) {
-    return std.math.lerp(a, b, 1 - @exp(-lambda * dt));
-}
-
 fn expDecayWithAnimationSpeed(a: anytype, b: @TypeOf(a), dt: @TypeOf(a)) @TypeOf(a) {
     return if (config.animation_speed) |lambda|
         std.math.lerp(a, b, 1 - @exp(-lambda * dt))
@@ -822,7 +821,7 @@ fn expDecayWithAnimationSpeed(a: anytype, b: @TypeOf(a), dt: @TypeOf(a)) @TypeOf
 const screen_grid_size_min = 10;
 const screen_grid_size_max = 1000;
 
-pub fn drawGridScale(camera: rl.Camera2D, zoom: f32) void {
+fn drawGridScale(camera: rl.Camera2D, zoom: f32) void {
     const grid_scale: f32 = camera.zoom * zoom;
     if (screen_grid_size_min <= grid_scale and grid_scale <= screen_grid_size_max) {
         var x: f32 = @mod((-camera.target.x) * camera.zoom + camera.offset.x, grid_scale);
@@ -842,7 +841,7 @@ pub fn drawGridScale(camera: rl.Camera2D, zoom: f32) void {
     }
 }
 
-pub fn drawCanvas(canvas: *Canvas) void {
+fn drawCanvas(canvas: *Canvas) void {
     // var buffer: [100]u8 = undefined;
     // _ = buffer; // autofix
     var counter: u32 = 0;
@@ -891,7 +890,26 @@ pub fn drawCanvas(canvas: *Canvas) void {
     tracy.plot(u32, "Strokes drawn", counter);
 }
 
-pub fn cameraRect(camera: rl.Camera2D) rl.Rectangle {
+fn clampCameraPosition(camera: *rl.Camera2D, board_padding: f32) void {
+    const target = &camera.target;
+    const offset = &camera.offset;
+    const zoom = camera.zoom;
+
+    if (target.x - offset.x / zoom < -board_padding) {
+        target.x = -board_padding + offset.x / zoom;
+    }
+    if (target.y - offset.y / zoom < -board_padding) {
+        target.y = -board_padding + offset.y / zoom;
+    }
+    if (target.x - offset.x / zoom > board_padding) {
+        target.x = board_padding + offset.x / zoom;
+    }
+    if (target.y - offset.y / zoom > board_padding) {
+        target.y = board_padding + offset.y / zoom;
+    }
+}
+
+fn cameraRect(camera: rl.Camera2D) rl.Rectangle {
     return .{
         .x = camera.target.x - camera.offset.x / camera.zoom,
         .y = camera.target.y - camera.offset.y / camera.zoom,
