@@ -8,7 +8,6 @@ const is_debug = @import("main.zig").is_debug;
 const main = @import("main.zig");
 const config = main.config;
 const Vec2 = main.Vector2;
-const OverrideQueue = @import("override_queue.zig").OverrideQueue;
 const Rectangle = @import("Rectangle.zig");
 
 const Drawer = @This();
@@ -41,7 +40,6 @@ draw_grid: bool = false,
 background_color: rl.Color = .blank,
 background_alpha_selector: ?Bar = null,
 
-random: std.Random.DefaultPrng,
 target_zoom: f32,
 
 start_position: ?Vec2,
@@ -89,8 +87,8 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
         .msaa_4x_hint = true,
     });
     rl.setTraceLogLevel(if (is_debug) .log_debug else .log_warning);
-    rl.initWindow(0, 0, config.app_name);
 
+    rl.initWindow(0, 0, config.app_name);
     errdefer rl.closeWindow();
 
     const dir_path = try getAppDataDirEnsurePathExist(gpa, config.save_folder_name);
@@ -103,31 +101,26 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
         var canvases: Canvases = try .initCapacity(gpa, 1);
         errdefer canvases.deinit(gpa);
 
-        if (true) {
-            const canvas = canvas: { // load canvas
-                const file_zone = tracy.initZone(@src(), .{ .name = "Open file" });
-                var file = dir.openFile(config.save_file_name, .{}) catch |err| switch (err) {
-                    error.FileNotFound => break :canvas Canvas.init,
-                    else => return err,
-                };
-                file_zone.deinit();
-                defer file.close();
-
-                var br = std.io.bufferedReader(file.reader());
-                const reader = br.reader();
-
-                break :canvas Canvas.load(gpa, reader) catch |e| {
-                    std.log.err("Can't load file {s}", .{@errorName(e)});
-
-                    break :canvas Canvas.init;
-                };
+        const canvas = canvas: { // load canvas
+            const file_zone = tracy.initZone(@src(), .{ .name = "Open file" });
+            var file = dir.openFile(config.save_file_name, .{}) catch |err| switch (err) {
+                error.FileNotFound => break :canvas Canvas.init,
+                else => return err,
             };
-            canvases.appendAssumeCapacity(canvas);
-        }
+            file_zone.deinit();
+            defer file.close();
 
-        errdefer for (canvases.items) |canvas| {
-            canvas.deinit(gpa);
+            var br = std.io.bufferedReader(file.reader());
+            const reader = br.reader();
+
+            break :canvas Canvas.load(gpa, reader) catch |e| {
+                std.log.err("Can't load file {s}", .{@errorName(e)});
+
+                break :canvas Canvas.init;
+            };
         };
+        canvases.appendAssumeCapacity(canvas);
+
         break :canvases canvases;
     };
     errdefer canvases.deinit(gpa);
@@ -139,22 +132,24 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
         .target_zoom = canvas.camera.zoom,
         .gpa = gpa,
         .color_wheel = .{ .center = @splat(0), .size = 0 },
-        .brush = .{ .color = rl.Color.red },
+        .brush = .{ .color = .red },
         .old_world_position = @bitCast(rl.getScreenToWorld2D(rl.getMousePosition(), canvas.camera)),
         .old_cursor_position = @bitCast(rl.getMousePosition()),
         .brush_state = .idle,
-        .random = std.Random.DefaultPrng.init(0),
         .save_directory = dir,
         .selected_canvas = 0,
         .canvases = canvases,
     };
-    canvas.camera.target =
-        canvas.camera.target.subtract(canvas.camera.offset.subtract(rl.getMousePosition())
-        .scale(canvas.camera.zoom));
-    canvas.camera.offset =
-        rl.getMousePosition();
+
+    // initial position of mouse is 0,0 so we need to reset it
+    canvas.camera.target = canvas.camera.target.subtract(canvas.camera.offset.scale(1 / canvas.camera.zoom));
+    canvas.camera.offset = .{ .x = 0, .y = 0 };
 
     return drawer;
+}
+
+pub fn getMouseDelta(self: *Drawer) rl.Vector2 {
+    return @bitCast(@as(Vec2, @bitCast(rl.getMousePosition())) - self.old_cursor_position);
 }
 
 pub fn deinit(self: *Drawer) void {
@@ -280,7 +275,7 @@ pub fn run(self: *Drawer) !void {
         const zone = tracy.initZone(@src(), .{ .name = "Tick" });
         defer zone.deinit();
         tracy.frameMark();
-        try tick(self);
+        try updateAndRender(self);
     }
 }
 
@@ -299,7 +294,7 @@ fn save(self: *@This()) !void {
     try self.canvases.items[self.selected_canvas].save(writer);
 }
 
-fn tick(self: *Drawer) !void {
+fn updateAndRender(self: *Drawer) !void {
     const canvas = &self.canvases.items[self.selected_canvas];
 
     var arena = std.heap.ArenaAllocator.init(self.gpa);
@@ -339,7 +334,7 @@ fn tick(self: *Drawer) !void {
             try self.save();
             std.log.info("Saved image", .{});
         } else if (isDown(key_bindings.drag)) {
-            canvas.camera.target = canvas.camera.target.subtract(rl.getMouseDelta().scale(1 / canvas.camera.zoom));
+            canvas.camera.target = canvas.camera.target.subtract(self.getMouseDelta().scale(1 / canvas.camera.zoom));
         }
         const board_padding = 100000000;
         clampCameraPosition(
@@ -365,7 +360,7 @@ fn tick(self: *Drawer) !void {
         self.target_zoom *= @exp(rl.getMouseWheelMoveV().y);
         self.target_zoom = std.math.clamp(self.target_zoom, min_zoom, max_zoom);
         const new_zoom = expDecayWithAnimationSpeed(canvas.camera.zoom, self.target_zoom, rl.getFrameTime());
-        canvas.camera.target = canvas.camera.target.subtract(rl.getMouseDelta().scale(-1 / canvas.camera.zoom));
+        canvas.camera.target = canvas.camera.target.subtract(self.getMouseDelta().scale(-1 / canvas.camera.zoom));
         canvas.camera.offset = rl.getMousePosition();
         canvas.camera.zoom = new_zoom;
     }
@@ -379,7 +374,7 @@ fn tick(self: *Drawer) !void {
             drawCanvas(canvas);
         }
 
-        {
+        if (false) {
             const zone = tracy.initZone(@src(), .{ .name = "Draw bounding box" });
             defer zone.deinit();
 
@@ -393,7 +388,7 @@ fn tick(self: *Drawer) !void {
                     .height = bounding_box.max[1] - bounding_box.min[1],
                 };
                 if (rl.checkCollisionRecs(camera_rect, ray_rect)) {
-                    // rl.drawRectangleLinesEx(ray_rect, config.line_thickness / 2 / canvas.camera.zoom, if (!stroke.is_active) .yellow else .blue);
+                    rl.drawRectangleLinesEx(ray_rect, config.line_thickness / 2 / canvas.camera.zoom, if (!stroke.is_active) .yellow else .blue);
                 }
             }
         }
@@ -526,7 +521,7 @@ fn tick(self: *Drawer) !void {
         defer canvas.camera.end();
 
         var mega_bounding_box: ?Canvas.BoundingBox = null;
-        const diff: Vec2 = @bitCast(rl.getMouseDelta());
+        const diff: Vec2 = @bitCast(self.getMouseDelta());
         for (self.selection.items) |selection_index| {
             std.log.debug("strokes {d}", .{canvas.strokes.items.len});
             std.log.debug("segments {d}", .{canvas.segments.items.len});
@@ -557,7 +552,6 @@ fn tick(self: *Drawer) !void {
             rl.drawRectangleLinesEx(rect, config.line_thickness / 2 / canvas.camera.zoom, .gray);
         }
     }
-    std.debug.print("{any}\n", .{self.selection.items});
 
     // Draw mouse
     if (self.brush_state == .eraser) {
@@ -842,8 +836,6 @@ fn drawGridScale(camera: rl.Camera2D, zoom: f32) void {
 }
 
 fn drawCanvas(canvas: *Canvas) void {
-    // var buffer: [100]u8 = undefined;
-    // _ = buffer; // autofix
     var counter: u32 = 0;
     const camera_rect = cameraRect(canvas.camera);
     for (canvas.strokes.items) |stroke| {
@@ -886,7 +878,6 @@ fn drawCanvas(canvas: *Canvas) void {
             }
         }
     }
-    std.debug.print("counter {d}\n", .{counter});
     tracy.plot(u32, "Strokes drawn", counter);
 }
 
