@@ -19,6 +19,18 @@ segments: std.ArrayListUnmanaged([2]f32),
 history: History,
 camera: rl.Camera2D,
 
+pub const init: Canvas = .{
+    .strokes = .{},
+    .segments = .{},
+    .history = .{},
+    .camera = .{
+        .zoom = 1,
+        .target = .{ .x = 0, .y = 0 },
+        .offset = .{ .x = 0, .y = 0 },
+        .rotation = 0,
+    },
+};
+
 const EventTypes = union(enum) {
     drawn: usize,
     erased: usize,
@@ -77,21 +89,6 @@ pub const Stroke = extern struct {
 const Span = extern struct {
     start: u64,
     size: u64,
-};
-
-pub const init: Canvas = .{
-    .strokes = .{},
-    .segments = .{},
-    .history = .{},
-    .camera = .{
-        .zoom = 1,
-        .target = .{ .x = 0, .y = 0 },
-        .offset = .init(
-            @floatFromInt(@divFloor(1000, 2)),
-            @floatFromInt(@divFloor(1000, 2)),
-        ),
-        .rotation = 0,
-    },
 };
 
 pub fn startStroke(
@@ -253,7 +250,7 @@ test Canvas {
     var random = std.Random.DefaultPrng.init(std.testing.random_seed);
     const rand = random.random();
 
-    var canvas = Canvas{};
+    var canvas: Canvas = .init;
     defer canvas.deinit(alloc);
 
     var file = std.ArrayList(u8).init(alloc);
@@ -300,7 +297,7 @@ test "Check leaks canvas" {
             var random = std.Random.DefaultPrng.init(std.testing.random_seed);
             const rand = random.random();
 
-            var canvas = Canvas{};
+            var canvas: Canvas = .init;
             defer canvas.deinit(alloc);
 
             var file = std.ArrayList(u8).init(alloc);

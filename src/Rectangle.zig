@@ -6,7 +6,8 @@ width: f32,
 height: f32,
 
 const Rectangle = @This();
-const Vec2 = @import("root").Vector2;
+
+const Vec2 = @Vector(2, f32);
 
 pub fn init(x: f32, y: f32, width: f32, height: f32) Rectangle {
     return Rectangle{ .x = x, .y = y, .width = width, .height = height };
