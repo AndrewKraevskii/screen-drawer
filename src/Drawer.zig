@@ -11,6 +11,8 @@ const Vec2 = main.Vector2;
 const Rectangle = @import("Rectangle.zig");
 
 const Drawer = @This();
+const input = @import("input.zig");
+const math = @import("math.zig");
 
 gpa: std.mem.Allocator,
 
@@ -47,7 +49,7 @@ selection: std.ArrayListUnmanaged(u64),
 
 save_directory: std.fs.Dir,
 
-const Canvases = std.ArrayListUnmanaged(Canvas);
+const Canvases = std.StringArrayHashMapUnmanaged(Canvas);
 
 fn getAppDataDirEnsurePathExist(alloc: std.mem.Allocator, appname: []const u8) ![]u8 {
     const data_dir_path = try std.fs.getAppDataDir(alloc, appname);
@@ -94,38 +96,33 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
     const dir_path = try getAppDataDirEnsurePathExist(gpa, config.save_folder_name);
     defer gpa.free(dir_path);
 
-    var dir = try std.fs.openDirAbsolute(dir_path, .{});
+    var dir = try std.fs.openDirAbsolute(dir_path, .{
+        .iterate = true,
+    });
     errdefer dir.close();
 
     const canvases = canvases: {
-        var canvases: Canvases = try .initCapacity(gpa, 1);
-        errdefer canvases.deinit(gpa);
+        var canvases: Canvases = .empty;
+        errdefer {
+            for (canvases.values(), canvases.keys()) |*canvas, name| {
+                canvas.deinit(gpa);
+                gpa.free(name);
+            }
+            canvases.deinit(gpa);
+        }
 
-        const canvas = canvas: { // load canvas
-            const file_zone = tracy.initZone(@src(), .{ .name = "Open file" });
-            var file = dir.openFile(config.save_file_name, .{}) catch |err| switch (err) {
-                error.FileNotFound => break :canvas Canvas.init,
-                else => return err,
-            };
-            file_zone.deinit();
-            defer file.close();
-
-            var br = std.io.bufferedReader(file.reader());
-            const reader = br.reader();
-
-            break :canvas Canvas.load(gpa, reader) catch |e| {
-                std.log.err("Can't load file {s}", .{@errorName(e)});
-
-                break :canvas Canvas.init;
-            };
-        };
-        canvases.appendAssumeCapacity(canvas);
+        const file_zone = tracy.initZone(@src(), .{ .name = "read canvases" });
+        defer file_zone.deinit();
+        var iter = dir.iterate();
+        while (try iter.next()) |entry| {
+            const canvas = loadCanvas(gpa, dir, entry.name) catch continue;
+            try canvases.putNoClobber(gpa, try gpa.dupe(u8, entry.name), canvas);
+        }
 
         break :canvases canvases;
     };
-    errdefer canvases.deinit(gpa);
 
-    const canvas = &canvases.items[0];
+    const canvas = &canvases.values()[0];
     const drawer: Drawer = .{
         .start_position = null,
         .selection = .{},
@@ -157,8 +154,9 @@ pub fn deinit(self: *Drawer) void {
         std.log.err("Failed to save: {s}", .{@errorName(e)});
     };
     self.save_directory.close();
-    for (self.canvases.items) |*canvas| {
+    for (self.canvases.values(), self.canvases.keys()) |*canvas, name| {
         canvas.deinit(self.gpa);
+        self.gpa.free(name);
     }
     self.canvases.deinit(self.gpa);
     self.selection.deinit(self.gpa);
@@ -282,20 +280,37 @@ pub fn run(self: *Drawer) !void {
 fn save(self: *@This()) !void {
     var atomic_file = try self.save_directory.atomicFile(config.save_file_name, .{});
     defer atomic_file.deinit();
+
     var bw = std.io.bufferedWriter(atomic_file.file.writer());
-    defer atomic_file.finish() catch |e| {
-        std.log.err("Failed to copy file: {s}", .{@errorName(e)});
-    };
-    defer bw.flush() catch |e| {
-        std.log.err("Failed to save: {s}", .{@errorName(e)});
-    };
     const writer = bw.writer();
 
-    try self.canvases.items[self.selected_canvas].save(writer);
+    try self.canvases.values()[self.selected_canvas].save(writer);
+
+    bw.flush() catch |e| {
+        std.log.err("Failed to save: {s}", .{@errorName(e)});
+    };
+    atomic_file.finish() catch |e| {
+        std.log.err("Failed to copy file: {s}", .{@errorName(e)});
+    };
+}
+
+fn loadCanvas(alloc: std.mem.Allocator, dir: std.fs.Dir, file_path: []const u8) !Canvas {
+    const file_zone = tracy.initZone(@src(), .{ .name = "Load canvas from file" });
+    file_zone.deinit();
+    var file = try dir.openFile(file_path, .{});
+    defer file.close();
+
+    var br = std.io.bufferedReader(file.reader());
+    const reader = br.reader();
+
+    return Canvas.load(alloc, reader) catch |e| {
+        std.log.err("Can't load file {s}", .{@errorName(e)});
+        return e;
+    };
 }
 
 fn updateAndRender(self: *Drawer) !void {
-    const canvas = &self.canvases.items[self.selected_canvas];
+    const canvas = &self.canvases.values()[self.selected_canvas];
 
     var arena = std.heap.ArenaAllocator.init(self.gpa);
     defer arena.deinit();
@@ -312,15 +327,15 @@ fn updateAndRender(self: *Drawer) !void {
     defer self.old_world_position = world_position;
     defer self.old_cursor_position = cursor_position;
 
-    // :global input
+    // global input
     {
         const key_bindings = config.key_bindings;
 
-        if (isPressed(key_bindings.toggle_keybindings)) {
+        if (input.isPressed(key_bindings.toggle_keybindings)) {
             self.showing_keybindings = !self.showing_keybindings;
-        } else if (isPressed(key_bindings.grid)) {
+        } else if (input.isPressed(key_bindings.grid)) {
             self.draw_grid = !self.draw_grid;
-        } else if (isPressed(key_bindings.reset_canvas)) {
+        } else if (input.isPressed(key_bindings.reset_canvas)) {
             self.selection.clearRetainingCapacity();
             canvas.deinit(self.gpa);
             canvas.* = .init;
@@ -330,10 +345,10 @@ fn updateAndRender(self: *Drawer) !void {
             );
             self.target_zoom = canvas.camera.zoom;
             std.debug.print("{any}\n", .{canvas});
-        } else if (isPressed(key_bindings.save)) {
+        } else if (input.isPressed(key_bindings.save)) {
             try self.save();
             std.log.info("Saved image", .{});
-        } else if (isDown(key_bindings.drag)) {
+        } else if (input.isDown(key_bindings.drag)) {
             canvas.camera.target = canvas.camera.target.subtract(self.getMouseDelta().scale(1 / canvas.camera.zoom));
         }
         const board_padding = 100000000;
@@ -341,12 +356,12 @@ fn updateAndRender(self: *Drawer) !void {
             &canvas.camera,
             board_padding,
         );
-        if (isPressedOrRepeat(key_bindings.undo)) {
+        if (input.isPressedOrRepeat(key_bindings.undo)) {
             if (canvas.history.undo()) |undo_event| {
                 undo_event.undo(canvas);
             }
         }
-        if (isPressedOrRepeat(key_bindings.redo)) {
+        if (input.isPressedOrRepeat(key_bindings.redo)) {
             if (canvas.history.redo()) |redo_event| {
                 redo_event.redo(canvas);
             }
@@ -359,51 +374,30 @@ fn updateAndRender(self: *Drawer) !void {
     { // camera zoom
         self.target_zoom *= @exp(rl.getMouseWheelMoveV().y);
         self.target_zoom = std.math.clamp(self.target_zoom, min_zoom, max_zoom);
-        const new_zoom = expDecayWithAnimationSpeed(canvas.camera.zoom, self.target_zoom, rl.getFrameTime());
+        const new_zoom = math.expDecayWithAnimationSpeed(canvas.camera.zoom, self.target_zoom, rl.getFrameTime());
         canvas.camera.target = canvas.camera.target.subtract(self.getMouseDelta().scale(-1 / canvas.camera.zoom));
         canvas.camera.offset = rl.getMousePosition();
         canvas.camera.zoom = new_zoom;
     }
-    {
+    { // draw canvas
         canvas.camera.begin();
         defer canvas.camera.end();
-        {
-            const zone = tracy.initZone(@src(), .{ .name = "Line drawing" });
-            defer zone.deinit();
+        const zone = tracy.initZone(@src(), .{ .name = "Line drawing" });
+        defer zone.deinit();
 
-            drawCanvas(canvas);
-        }
-
-        if (false) {
-            const zone = tracy.initZone(@src(), .{ .name = "Draw bounding box" });
-            defer zone.deinit();
-
-            const camera_rect = cameraRect(canvas.camera);
-            for (canvas.strokes.items) |stroke| {
-                const bounding_box = canvas.calculateBoundingBoxForStroke(stroke);
-                const ray_rect = rl.Rectangle{
-                    .x = bounding_box.min[0],
-                    .y = bounding_box.min[1],
-                    .width = bounding_box.max[0] - bounding_box.min[0],
-                    .height = bounding_box.max[1] - bounding_box.min[1],
-                };
-                if (rl.checkCollisionRecs(camera_rect, ray_rect)) {
-                    rl.drawRectangleLinesEx(ray_rect, config.line_thickness / 2 / canvas.camera.zoom, if (!stroke.is_active) .yellow else .blue);
-                }
-            }
-        }
+        drawCanvas(canvas);
     }
 
     self.brush_state = switch (self.brush_state) {
-        .idle => if (isDown(config.key_bindings.select)) state: {
+        .idle => if (input.isDown(config.key_bindings.select)) state: {
             self.start_position = @as(Vec2, @bitCast(rl.getMousePosition()));
             break :state .selecting;
-        } else if (isDown(config.key_bindings.eraser))
+        } else if (input.isDown(config.key_bindings.eraser))
             .eraser
-        else if (isPressed(config.key_bindings.picking_color)) state: {
+        else if (input.isPressed(config.key_bindings.picking_color)) state: {
             self.color_wheel = .{ .center = cursor_position, .size = 0 };
             break :state .picking_color;
-        } else if (isDown(config.key_bindings.draw)) state: {
+        } else if (input.isDown(config.key_bindings.draw)) state: {
             try canvas.startStroke(self.gpa, self.brush.color, config.line_thickness / canvas.camera.zoom);
             break :state .drawing;
         } else .idle,
@@ -414,7 +408,7 @@ fn updateAndRender(self: *Drawer) !void {
                 @bitCast(world_position),
                 canvas.camera.zoom,
             );
-            break :state if (isDown(config.key_bindings.draw))
+            break :state if (input.isDown(config.key_bindings.draw))
                 .drawing
             else
                 .idle;
@@ -427,14 +421,14 @@ fn updateAndRender(self: *Drawer) !void {
             std.log.debug("eraser strokes {d}", .{canvas.strokes.items.len});
             std.log.debug("eraser segments {d}", .{canvas.segments.items.len});
 
-            break :state if (isDown(config.key_bindings.eraser)) .eraser else .idle;
+            break :state if (input.isDown(config.key_bindings.eraser)) .eraser else .idle;
         },
         .picking_color => state: {
             self.brush.color = self.color_wheel.draw(cursor_position);
-            break :state if (!isDown(config.key_bindings.picking_color))
+            break :state if (!input.isDown(config.key_bindings.picking_color))
                 .idle
             else {
-                self.color_wheel.size = expDecayWithAnimationSpeed(
+                self.color_wheel.size = math.expDecayWithAnimationSpeed(
                     self.color_wheel.size,
                     config.color_wheel_size,
                     rl.getFrameTime(),
@@ -442,12 +436,12 @@ fn updateAndRender(self: *Drawer) !void {
                 break :state .picking_color;
             };
         },
-        .selecting => if (isDown(config.key_bindings.select))
+        .selecting => if (input.isDown(config.key_bindings.select))
             .selecting
         else blk: {
             break :blk .selected;
         },
-        .selected => if (isPressed(config.key_bindings.drag)) blk: {
+        .selected => if (input.isPressed(config.key_bindings.drag)) blk: {
             self.selection.clearRetainingCapacity();
             break :blk .idle;
         } else .selected,
@@ -470,7 +464,7 @@ fn updateAndRender(self: *Drawer) !void {
 
     // Shrink and draw color picker
     if (self.brush_state != .picking_color) {
-        self.color_wheel.size = expDecayWithAnimationSpeed(self.color_wheel.size, 0, rl.getFrameTime());
+        self.color_wheel.size = math.expDecayWithAnimationSpeed(self.color_wheel.size, 0, rl.getFrameTime());
         _ = self.color_wheel.draw(cursor_position);
     }
 
@@ -526,7 +520,7 @@ fn updateAndRender(self: *Drawer) !void {
             std.log.debug("strokes {d}", .{canvas.strokes.items.len});
             std.log.debug("segments {d}", .{canvas.segments.items.len});
             const stroke = canvas.strokes.items[selection_index];
-            if (isDown(config.key_bindings.draw)) {
+            if (input.isDown(config.key_bindings.draw)) {
                 for (canvas.segments.items[stroke.span.start..][0..stroke.span.size]) |*segment| {
                     segment.* = @as(Vec2, segment.*) + diff * @as(Vec2, @splat(1 / canvas.camera.zoom));
                 }
@@ -560,18 +554,20 @@ fn updateAndRender(self: *Drawer) !void {
         rl.drawCircleV(@bitCast(cursor_position), self.brush.radius * 2, self.brush.color);
     }
 
-    if (isDown(config.key_bindings.change_brightness)) {
+    if (input.isDown(config.key_bindings.change_brightness)) {
         if (self.background_alpha_selector) |bar| {
             self.background_color = self.background_color.alpha(bar.draw(cursor_position));
         } else {
             self.background_alpha_selector = Bar.init(cursor_position, self.background_color.normalize().w, .{ .text = "Background alpha" });
         }
     } else {
-        if (self.background_alpha_selector) |_| {
-            self.background_alpha_selector = null;
-        }
+        self.background_alpha_selector = null;
     }
-    {
+
+    if (self.showing_keybindings) {
+        try drawKeybindingsHelp(arena.allocator(), .{ 100, 100 });
+    }
+    if (@import("builtin").mode == .Debug) {
         const fmt_string = "zoom level: {d}";
 
         var buffer: [std.fmt.count(fmt_string, .{std.math.floatMax(f32)}) + 100]u8 = undefined;
@@ -585,15 +581,13 @@ fn updateAndRender(self: *Drawer) !void {
         }
         const str = try std.fmt.allocPrintZ(arena.allocator(), "position: {d}x,{d}y", .{ canvas.camera.target.x, canvas.camera.target.y });
         rl.drawText(str, 40, 130, 50, .white);
-    }
-    if (self.showing_keybindings) {
-        try drawKeybindingsHelp(arena.allocator(), .{ 100, 100 });
-    }
-    if (@import("builtin").mode == .Debug)
+
         rl.drawFPS(0, 0);
+    }
 
     const zone = tracy.initZone(@src(), .{ .name = "End drawing" });
     defer zone.deinit();
+
     rl.endDrawing();
 }
 
@@ -611,72 +605,6 @@ fn drawLabels(canvas: *Canvas) void {
             }
         }
     }
-}
-
-/// True if all passed keys and buttons are down
-fn isDown(keys_or_buttons: anytype) bool {
-    inline for (keys_or_buttons) |key_or_button| {
-        switch (@TypeOf(key_or_button)) {
-            rl.KeyboardKey => if (!rl.isKeyDown(key_or_button))
-                return false,
-            rl.MouseButton => if (!rl.isMouseButtonDown(key_or_button))
-                return false,
-
-            else => @panic("Wrong type passed"),
-        }
-    }
-
-    return true;
-}
-
-/// True if isDown(keys_or_buttons) true and at least one of key_or_button pressed on this frame
-fn isPressed(keys_or_buttons: anytype) bool {
-    if (!isDown(keys_or_buttons)) return false;
-
-    inline for (keys_or_buttons) |key_or_button| {
-        switch (@TypeOf(key_or_button)) {
-            rl.KeyboardKey => if (rl.isKeyPressed(key_or_button) and !isModifierKey(key_or_button))
-                return true,
-            rl.MouseButton => if (rl.isMouseButtonPressed(key_or_button))
-                return true,
-            else => unreachable, // since we checked it in isDown
-        }
-    }
-
-    return false;
-}
-
-fn isPressedOrRepeat(keys_or_buttons: anytype) bool {
-    return isPressedRepeat(keys_or_buttons) or isPressed(keys_or_buttons);
-}
-
-fn isPressedRepeat(keys_or_buttons: anytype) bool {
-    if (!isDown(keys_or_buttons)) return false;
-
-    inline for (keys_or_buttons) |key_or_button| {
-        switch (@TypeOf(key_or_button)) {
-            rl.KeyboardKey => if (rl.isKeyPressedRepeat(key_or_button) and !isModifierKey(key_or_button))
-                return true,
-            rl.MouseButton => if (rl.isMouseButtonPressed(key_or_button))
-                return true,
-            else => unreachable, // since we checked it in isDown
-        }
-    }
-
-    return false;
-}
-
-fn isModifierKey(key: rl.KeyboardKey) bool {
-    return switch (key) {
-        .key_left_control,
-        .key_left_alt,
-        .key_left_shift,
-        .key_right_control,
-        .key_right_alt,
-        .key_right_shift,
-        => true,
-        else => false,
-    };
 }
 
 const ColorWheel = struct {
@@ -804,13 +732,6 @@ const Bar = struct {
         return selected_value * (self.max - self.min) + self.min;
     }
 };
-
-fn expDecayWithAnimationSpeed(a: anytype, b: @TypeOf(a), dt: @TypeOf(a)) @TypeOf(a) {
-    return if (config.animation_speed) |lambda|
-        std.math.lerp(a, b, 1 - @exp(-lambda * dt))
-    else
-        b;
-}
 
 const screen_grid_size_min = 10;
 const screen_grid_size_max = 1000;
