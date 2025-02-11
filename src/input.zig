@@ -55,12 +55,12 @@ pub fn isPressedRepeat(keys_or_buttons: anytype) bool {
 
 pub fn isModifierKey(key: rl.KeyboardKey) bool {
     return switch (key) {
-        .key_left_control,
-        .key_left_alt,
-        .key_left_shift,
-        .key_right_control,
-        .key_right_alt,
-        .key_right_shift,
+        .left_control,
+        .left_alt,
+        .left_shift,
+        .right_control,
+        .right_alt,
+        .right_shift,
         => true,
         else => false,
     };

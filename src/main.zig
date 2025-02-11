@@ -15,18 +15,18 @@ pub const config = struct {
 
     pub const key_bindings = struct {
         // zig fmt: off
-        pub const draw                = .{ rl.MouseButton.mouse_button_left };
-        pub const undo                = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_minus };
-        pub const redo                = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_equal };
-        pub const picking_color       = .{ rl.KeyboardKey.key_left_bracket };
-        pub const eraser              = .{ rl.KeyboardKey.key_e };
-        pub const drag                = .{ rl.MouseButton.mouse_button_right };
-        pub const toggle_keybindings  = .{ rl.KeyboardKey.key_h };
-        pub const select              = .{ rl.KeyboardKey.key_left_control, rl.MouseButton.mouse_button_left };
-        pub const change_brightness   = .{ rl.KeyboardKey.key_b };
-        pub const save                = .{ rl.KeyboardKey.key_left_control, rl.KeyboardKey.key_s };
-        pub const grid                = .{ rl.KeyboardKey.key_g };
-        pub const reset_canvas        = .{ rl.KeyboardKey.key_r };
+        pub const draw                = .{ rl.MouseButton.left };
+        pub const undo                = .{ rl.KeyboardKey.left_control, rl.KeyboardKey.minus };
+        pub const redo                = .{ rl.KeyboardKey.left_control, rl.KeyboardKey.equal };
+        pub const picking_color       = .{ rl.KeyboardKey.left_bracket };
+        pub const eraser              = .{ rl.KeyboardKey.e };
+        pub const drag                = .{ rl.MouseButton.right };
+        pub const toggle_keybindings  = .{ rl.KeyboardKey.h };
+        pub const select              = .{ rl.KeyboardKey.left_control, rl.MouseButton.left };
+        pub const change_brightness   = .{ rl.KeyboardKey.b };
+        pub const save                = .{ rl.KeyboardKey.left_control, rl.KeyboardKey.s };
+        pub const grid                = .{ rl.KeyboardKey.g };
+        pub const reset_canvas        = .{ rl.KeyboardKey.r };
         // zig fmt: on
 
         comptime {

@@ -3,12 +3,12 @@
     .version = "0.0.0",
     .dependencies = .{
         .@"raylib-zig" = .{
-            .url = "git+https://github.com/AndrewKraevskii/raylib-zig?ref=devel#63c974d5951e437d15af0ebdd8304af6fb41abbf",
-            .hash = "1220be9da92d95d4b0383b009066782a0969227c39d5446b7518dd442c841bf7f083",
+            .url = "git+https://github.com/andrewkraevskii/raylib-zig#f5922db76078365aac947e909b04eca8a4a8288e",
+            .hash = "122080ef1eb2cf47cce28c47e61d1443e24fa1905343fea9e0c637b12eb26f050ec6",
         },
         .@"zig-tracy" = .{
-            .url = "git+https://github.com/kcbanner/zig-tracy#45fe4407a21583a96452dbd61d1e9b6026cf43a6",
-            .hash = "12209e47fe42333afe0f7c2beb37fa2918c13e3654b3b3150cd098cc91d5e5f0880c",
+            .url = "git+https://github.com/andrewkraevskii/zig-tracy#ec87a24f0a6180b7701cc90af80879ca8ffef83c",
+            .hash = "12202524dc533a9d70de9e8e5d7585b7ecc7fa684ffd5756dbc5388237e09b5cfbba",
         },
     },
     .paths = .{

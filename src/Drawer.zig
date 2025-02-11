@@ -72,7 +72,7 @@ fn debugDrawHistory(history: Canvas.History, pos: Vec2) void {
             .drawn => |i| .{ std.fmt.bufPrintZ(&buffer, "drawn1 {d}", .{i}) catch unreachable, rl.Color.green.alpha(alpha) },
             .erased => |i| .{ std.fmt.bufPrintZ(&buffer, "erased {d}", .{i}) catch unreachable, rl.Color.red.alpha(alpha) },
         };
-        rl.drawTextEx(rl.getFontDefault(), text, @bitCast(pos + Vec2{ 0, y_offset }), font_size, 2, color);
+        rl.drawTextEx(rl.getFontDefault() catch @panic("font should be there"), text, @bitCast(pos + Vec2{ 0, y_offset }), font_size, 2, color);
     }
 }
 
@@ -88,7 +88,7 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
         .vsync_hint = true,
         .msaa_4x_hint = true,
     });
-    rl.setTraceLogLevel(if (is_debug) .log_debug else .log_warning);
+    rl.setTraceLogLevel(if (is_debug) .debug else .warning);
 
     rl.initWindow(0, 0, config.app_name);
     errdefer rl.closeWindow();
@@ -196,7 +196,7 @@ fn drawKeybindingsHelp(arena: std.mem.Allocator, position: Vec2) !void {
                 self.spacing,
             ));
         }
-    } = .{ .font = rl.getFontDefault(), .spacing = spacing, .font_size = font_size };
+    } = .{ .font = rl.getFontDefault() catch @panic("font should be there"), .spacing = spacing, .font_size = font_size };
 
     const max_width_left, const max_width_right = max_width: {
         var max_width_left: f32 = 0;
@@ -238,7 +238,7 @@ fn drawKeybindingsHelp(arena: std.mem.Allocator, position: Vec2) !void {
 
         {
             rl.drawTextEx(
-                rl.getFontDefault(),
+                rl.getFontDefault() catch @panic("font should be there"),
                 name,
                 @bitCast(pos),
                 font_size,
@@ -259,7 +259,7 @@ fn drawKeybindingsHelp(arena: std.mem.Allocator, position: Vec2) !void {
             }
             try string_builder.append(0);
             rl.drawTextEx(
-                rl.getFontDefault(),
+                rl.getFontDefault() catch @panic("font should be there"),
                 @ptrCast(string_builder.items.ptr),
                 @bitCast(pos + Vec2{ max_width_left, 0 }),
                 font_size,
@@ -365,7 +365,7 @@ fn updateAndRender(self: *Drawer) !void {
                 }
             }
         }
-        if (rl.isKeyPressed(.key_n)) {
+        if (rl.isKeyPressed(.n)) {
             const name = try generateName(self.gpa);
             std.log.info("Created new canvas: {s}", .{name});
 
