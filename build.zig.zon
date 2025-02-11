@@ -1,14 +1,11 @@
 .{
-    .name = "screen_drawer",
+    .name = .screen_drawer,
     .version = "0.0.0",
+    .fingerprint = 0xa4dcbca8fd96dcf8,
     .dependencies = .{
         .@"raylib-zig" = .{
-            .url = "git+https://github.com/andrewkraevskii/raylib-zig#f5922db76078365aac947e909b04eca8a4a8288e",
-            .hash = "122080ef1eb2cf47cce28c47e61d1443e24fa1905343fea9e0c637b12eb26f050ec6",
-        },
-        .@"zig-tracy" = .{
-            .url = "git+https://github.com/andrewkraevskii/zig-tracy#c05db2cca3f49a77459835e77c12fb4a3680eaa7",
-            .hash = "1220a3c438dad3a4e731782a9d3fdba45a2bc7b159d75091c6b3156b65d1229a253d",
+            .url = "git+https://github.com/Not-Nik/raylib-zig.git#8d5a7d382c75fecfa6b8ce82577c1bba50caea99",
+            .hash = "raylib_zig-5.6.0-dev-KE8REHguBQAE0xoNkra7mtEqr8cCZHk7k_03txLZB-cZ",
         },
     },
     .paths = .{

@@ -43,8 +43,10 @@ pub const config = struct {
     /// Set to null to disable animations.
     pub const animation_speed: ?comptime_int = 10;
 
-    pub const exit_on_unfocus = !@import("options").tracy_enable;
-    pub const is_topmost = !@import("options").tracy_enable;
+    // pub const exit_on_unfocus = !@import("options").tracy_enable;
+    // pub const is_topmost = !@import("options").tracy_enable;
+    pub const exit_on_unfocus = true;
+    pub const is_topmost = true;
     pub const line_thickness = 4;
     pub const eraser_thickness = 40;
     pub const color_wheel_size = 100;
@@ -59,9 +61,9 @@ pub const std_options = std.Options{
 pub fn main() !void {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_impl.deinit();
-    var tracing_alloc = tracy.TracingAllocator.init(gpa_impl.allocator());
+    // var tracing_alloc = tracy.TracingAllocator.init(gpa_impl.allocator());
 
-    var drawer = try Drawer.init(tracing_alloc.allocator());
+    var drawer = try Drawer.init(gpa_impl.allocator());
     defer drawer.deinit();
     try drawer.run();
 }

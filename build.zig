@@ -5,16 +5,10 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const no_bin = b.option(bool, "no-bin", "Don't emit binary file") orelse false;
-    const tracy_enable = b.option(bool, "tracy_enable", "Enable profiling") orelse false;
+    // const tracy_enable = b.option(bool, "tracy_enable", "Enable profiling") orelse false;
 
     const options = b.addOptions();
-    options.addOption(bool, "tracy_enable", tracy_enable);
-
-    const tracy = b.dependency("zig-tracy", .{
-        .target = target,
-        .optimize = optimize,
-        .tracy_enable = tracy_enable,
-    });
+    // options.addOption(bool, "tracy_enable", tracy_enable);
 
     const raylib_dep = b.dependency("raylib-zig", .{
         .target = target,
@@ -35,8 +29,6 @@ pub fn build(b: *std.Build) void {
     exe.linkLibrary(raylib_artifact);
     exe.root_module.addImport("raylib", raylib);
     exe.root_module.addImport("raygui", raygui);
-    exe.root_module.addImport("tracy", tracy.module("tracy"));
-    exe.linkLibrary(tracy.artifact("tracy"));
     exe.linkLibCpp();
 
     if (no_bin) {
@@ -67,8 +59,6 @@ pub fn build(b: *std.Build) void {
     exe_unit_tests.linkLibrary(raylib_artifact);
     exe_unit_tests.root_module.addImport("raylib", raylib);
     exe_unit_tests.root_module.addImport("raygui", raygui);
-    exe_unit_tests.root_module.addImport("tracy", tracy.module("tracy"));
-    exe_unit_tests.linkLibrary(tracy.artifact("tracy"));
     exe_unit_tests.linkLibCpp();
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
