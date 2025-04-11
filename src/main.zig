@@ -26,7 +26,7 @@ pub const config = struct {
         pub const change_brightness   = .{ rl.KeyboardKey.b };
         pub const save                = .{ rl.KeyboardKey.left_control, rl.KeyboardKey.s };
         pub const grid                = .{ rl.KeyboardKey.g };
-        pub const reset_canvas        = .{ rl.KeyboardKey.r };
+        pub const reset_canvas        = .{ rl.KeyboardKey.left_control, rl.KeyboardKey.r };
         // zig fmt: on
 
         comptime {
