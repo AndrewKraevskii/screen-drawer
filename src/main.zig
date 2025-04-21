@@ -25,6 +25,7 @@ pub const config = struct {
         pub const select              = .{ rl.KeyboardKey.left_control, rl.MouseButton.left };
         pub const change_brightness   = .{ rl.KeyboardKey.b };
         pub const save                = .{ rl.KeyboardKey.left_control, rl.KeyboardKey.s };
+        pub const @"export"           = .{ rl.KeyboardKey.left_control, rl.KeyboardKey.e };
         pub const grid                = .{ rl.KeyboardKey.g };
         pub const reset_canvas        = .{ rl.KeyboardKey.left_control, rl.KeyboardKey.r };
         // zig fmt: on

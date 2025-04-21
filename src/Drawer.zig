@@ -356,6 +356,20 @@ fn updateAndRender(self: *Drawer) !void {
                     &self.canvases.values()[canvas_index],
                 );
             std.log.info("Saved image", .{});
+        } else if (input.isPressed(key_bindings.@"export")) {
+            if (self.selected_canvas) |canvas_index| {
+                const file = try std.fs.cwd().createFile("exported.excalidraw", .{});
+                defer file.close();
+
+                var buffered = std.io.bufferedWriter(file.writer());
+                defer buffered.flush() catch {};
+
+                try @import("excalidraw.zig").@"export"(
+                    &self.canvases.values()[canvas_index],
+                    buffered.writer(),
+                );
+            }
+            std.log.info("Saved image", .{});
         } else if (maybe_canvas) |canvas| {
             if (input.isPressedOrRepeat(key_bindings.undo)) {
                 if (canvas.history.undo()) |undo_event| {
