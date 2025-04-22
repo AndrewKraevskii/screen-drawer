@@ -23,7 +23,16 @@ pub fn @"export"(canvas: *const Canvas, writer: anytype) !void {
         for (canvas.strokes.items) |stroke| {
             if (!stroke.is_active) continue;
 
-            const bounding_box = canvas.calculateBoundingBoxForStroke(stroke);
+            const scale = 10;
+
+            const bounding_box: Canvas.BoundingBox = blk: {
+                const box = canvas.calculateBoundingBoxForStroke(stroke);
+                break :blk .{
+                    .min = .{ box.min[0] / scale, box.min[1] / scale },
+                    .max = .{ box.max[0] / scale, box.max[1] / scale },
+                };
+            };
+
             const color = colorToHex(stroke.color);
 
             try stream.beginObject();
@@ -50,7 +59,7 @@ pub fn @"export"(canvas: *const Canvas, writer: anytype) !void {
             try stream.objectField("fillStyle");
             try stream.write("solid");
             try stream.objectField("strokeWidth");
-            try stream.write(2);
+            try stream.write(stroke.width / scale / 2);
             try stream.objectField("strokeStyle");
             try stream.write("solid");
             try stream.objectField("roughness");
@@ -92,8 +101,8 @@ pub fn @"export"(canvas: *const Canvas, writer: anytype) !void {
 
                 for (canvas.segments.items[stroke.span.start..][0..stroke.span.size]) |point| {
                     try stream.write([2]f32{
-                        point[0] - bounding_box.min[0],
-                        point[1] - bounding_box.min[1],
+                        (point[0] / scale - bounding_box.min[0]),
+                        (point[1] / scale - bounding_box.min[1]),
                     });
                 }
             }
