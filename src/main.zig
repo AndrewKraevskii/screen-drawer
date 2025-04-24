@@ -60,9 +60,8 @@ pub const std_options = std.Options{
 };
 
 pub fn main() !void {
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
-    // var tracing_alloc = tracy.TracingAllocator.init(gpa_impl.allocator());
 
     var drawer = try Drawer.init(gpa_impl.allocator());
     defer drawer.deinit();
