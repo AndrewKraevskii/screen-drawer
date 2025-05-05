@@ -263,7 +263,7 @@ fn drawKeybindingsHelp(arena: std.mem.Allocator, position: Vec2) !void {
             try string_builder.append(0);
             rl.drawTextEx(
                 rl.getFontDefault() catch @panic("font should be there"),
-                string_builder.items[0.. :0],
+                string_builder.items[0 .. string_builder.items.len - 1 :0],
                 @bitCast(pos + Vec2{ max_width_left, 0 }),
                 font_size,
                 spacing,
