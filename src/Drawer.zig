@@ -13,6 +13,7 @@ const Rectangle = @import("Rectangle.zig");
 const UILayout = @import("UILayout.zig");
 
 const Drawer = @This();
+
 gpa: std.mem.Allocator,
 
 brush_state: union(enum) {
@@ -26,7 +27,7 @@ brush_state: union(enum) {
 
 color_wheel: ColorWheel,
 brush: struct {
-    radius: f32 = config.line_thickness,
+    radius: f32,
     color: rl.Color,
 },
 
@@ -35,46 +36,21 @@ selected_canvas: ?usize,
 old_world_position: Vec2,
 old_cursor_position: Vec2,
 
-showing_keybindings: bool = false,
-draw_grid: bool = false,
+showing_keybindings: bool,
+draw_grid: bool,
 
-background_color: rl.Color = .blank,
-background_alpha_selector: ?Bar = null,
+background_color: rl.Color,
+background_alpha_selector: ?Bar,
 
 target_zoom: f32,
 
-start_position: ?Vec2,
+selection_start_position: ?Vec2,
 selection: std.ArrayListUnmanaged(u64),
 
 save_directory: std.fs.Dir,
 random: std.Random.DefaultPrng,
 
 const Canvases = std.StringArrayHashMapUnmanaged(Canvas);
-
-fn getAppDataDirEnsurePathExist(alloc: std.mem.Allocator, appname: []const u8) ![]u8 {
-    const data_dir_path = try std.fs.getAppDataDir(alloc, appname);
-
-    std.fs.makeDirAbsolute(data_dir_path) catch |e| switch (e) {
-        error.PathAlreadyExists => {},
-        else => |err| return err,
-    };
-    return data_dir_path;
-}
-
-fn debugDrawHistory(history: Canvas.History, pos: Vec2) void {
-    const font_size = 20;
-    const y_spacing = 10;
-    for (history.events.items, 0..) |entry, index| {
-        const alpha: f32 = if (index >= history.events.items.len - history.undone) 0.4 else 1;
-        var buffer: [100]u8 = undefined;
-        const y_offset: f32 = (font_size + y_spacing) * @as(f32, @floatFromInt(index));
-        const text, const color = switch (entry) {
-            .drawn => |i| .{ std.fmt.bufPrintZ(&buffer, "drawn1 {d}", .{i}) catch unreachable, rl.Color.green.alpha(alpha) },
-            .erased => |i| .{ std.fmt.bufPrintZ(&buffer, "erased {d}", .{i}) catch unreachable, rl.Color.red.alpha(alpha) },
-        };
-        rl.drawTextEx(rl.getFontDefault() catch @panic("font should be there"), text, @bitCast(pos + Vec2{ 0, y_offset }), font_size, 2, color);
-    }
-}
 
 pub fn init(gpa: std.mem.Allocator) !Drawer {
     rl.setConfigFlags(.{
@@ -131,13 +107,20 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
     } else &Canvas.init;
 
     const drawer: Drawer = .{
+        .background_color = .blank,
+        .background_alpha_selector = null,
+        .draw_grid = false,
+        .showing_keybindings = false,
         .random = .init(std.crypto.random.int(u64)),
-        .start_position = null,
+        .selection_start_position = null,
         .selection = .{},
         .target_zoom = canvas.camera.zoom,
         .gpa = gpa,
         .color_wheel = .{ .center = @splat(0), .size = 0 },
-        .brush = .{ .color = .red },
+        .brush = .{
+            .color = .red,
+            .radius = config.line_thickness,
+        },
         .old_world_position = @bitCast(rl.getScreenToWorld2D(rl.getMousePosition(), canvas.camera)),
         .old_cursor_position = @bitCast(rl.getMousePosition()),
         .brush_state = .idle,
@@ -419,7 +402,7 @@ fn updateAndRender(self: *Drawer) !void {
 
         self.brush_state = switch (self.brush_state) {
             .idle => if (input.isDown(config.key_bindings.select)) state: {
-                self.start_position = @as(Vec2, @bitCast(rl.getMousePosition()));
+                self.selection_start_position = @as(Vec2, @bitCast(rl.getMousePosition()));
                 break :state .selecting;
             } else if (input.isDown(config.key_bindings.eraser))
                 .eraser
@@ -498,7 +481,7 @@ fn updateAndRender(self: *Drawer) !void {
         // Draw selection
         if (self.brush_state == .selecting) draw_selection: {
             std.log.debug("Selection", .{});
-            const start = self.start_position orelse break :draw_selection;
+            const start = self.selection_start_position orelse break :draw_selection;
             const selection_rect: Rectangle = .fromPoints(start, @bitCast(rl.getMousePosition()));
             const selection_rect_world = selection_rect.toWorld(canvas.camera);
             rl.drawRectangleLinesEx(selection_rect.toRay(), 3, .gray);
@@ -857,4 +840,29 @@ fn cameraRect(camera: rl.Camera2D) rl.Rectangle {
         .width = @as(f32, @floatFromInt(rl.getScreenWidth())) / camera.zoom,
         .height = @as(f32, @floatFromInt(rl.getScreenHeight())) / camera.zoom,
     };
+}
+
+fn getAppDataDirEnsurePathExist(alloc: std.mem.Allocator, appname: []const u8) ![]u8 {
+    const data_dir_path = try std.fs.getAppDataDir(alloc, appname);
+
+    std.fs.makeDirAbsolute(data_dir_path) catch |e| switch (e) {
+        error.PathAlreadyExists => {},
+        else => |err| return err,
+    };
+    return data_dir_path;
+}
+
+fn debugDrawHistory(history: Canvas.History, pos: Vec2) void {
+    const font_size = 20;
+    const y_spacing = 10;
+    for (history.events.items, 0..) |entry, index| {
+        const alpha: f32 = if (index >= history.events.items.len - history.undone) 0.4 else 1;
+        var buffer: [100]u8 = undefined;
+        const y_offset: f32 = (font_size + y_spacing) * @as(f32, @floatFromInt(index));
+        const text, const color = switch (entry) {
+            .drawn => |i| .{ std.fmt.bufPrintZ(&buffer, "drawn1 {d}", .{i}) catch unreachable, rl.Color.green.alpha(alpha) },
+            .erased => |i| .{ std.fmt.bufPrintZ(&buffer, "erased {d}", .{i}) catch unreachable, rl.Color.red.alpha(alpha) },
+        };
+        rl.drawTextEx(rl.getFontDefault() catch @panic("font should be there"), text, @bitCast(pos + Vec2{ 0, y_offset }), font_size, 2, color);
+    }
 }
