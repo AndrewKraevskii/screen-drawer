@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const rl = @import("raylib");
-const tracy = @import("tracy");
 
 const Drawer = @import("Drawer.zig");
 
@@ -44,8 +43,6 @@ pub const config = struct {
     /// Set to null to disable animations.
     pub const animation_speed: ?comptime_int = 10;
 
-    // pub const exit_on_unfocus = !@import("options").tracy_enable;
-    // pub const is_topmost = !@import("options").tracy_enable;
     pub const exit_on_unfocus = true;
     pub const is_topmost = true;
     pub const line_thickness = 4;

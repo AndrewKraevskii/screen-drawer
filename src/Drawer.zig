@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const rl = @import("raylib");
-const tracy = @import("tracy");
 
 const Canvas = @import("Canvas.zig");
 const input = @import("input.zig");
@@ -77,9 +76,6 @@ fn debugDrawHistory(history: Canvas.History, pos: Vec2) void {
 }
 
 pub fn init(gpa: std.mem.Allocator) !Drawer {
-    // const zone = tracy.initZone(@src(), .{});
-    // defer zone.deinit();
-
     rl.setConfigFlags(.{
         .window_topmost = config.is_topmost,
         .window_transparent = true,
@@ -111,8 +107,6 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
             canvases.deinit(gpa);
         }
 
-        // const file_zone = tracy.initZone(@src(), .{ .name = "read canvases" });
-        // defer file_zone.deinit();
         var iter = dir.iterate();
         while (try iter.next()) |entry| {
             if (entry.kind != .file or
@@ -171,9 +165,6 @@ pub fn deinit(self: *Drawer) void {
 }
 
 fn drawKeybindingsHelp(arena: std.mem.Allocator, position: Vec2) !void {
-    // const zone = tracy.initZone(@src(), .{ .name = "drawKeybindingsHelp" });
-    // defer zone.deinit();
-
     const starting_position = position;
     const font_size = 20;
     const spacing = 3;
@@ -189,9 +180,6 @@ fn drawKeybindingsHelp(arena: std.mem.Allocator, position: Vec2) !void {
         font_size: f32,
 
         fn measureText(self: @This(), text: [:0]const u8) Vec2 {
-            // const measurer_zone = tracy.initZone(@src(), .{ .name = "measure text" });
-            // defer measurer_zone.deinit();
-
             return @bitCast(rl.measureTextEx(
                 self.font,
                 text,
@@ -277,9 +265,6 @@ pub fn run(self: *Drawer) !void {
     while (!(rl.windowShouldClose() or
         (config.exit_on_unfocus and !rl.isWindowFocused())))
     {
-        // const zone = tracy.initZone(@src(), .{ .name = "Tick" });
-        // defer zone.deinit();
-        // tracy.frameMark();
         try updateAndRender(self);
     }
 }
@@ -302,8 +287,6 @@ fn saveCanvas(dir: std.fs.Dir, name: []const u8, canvas: *Canvas) !void {
 }
 
 fn loadCanvas(alloc: std.mem.Allocator, dir: std.fs.Dir, file_path: []const u8) !Canvas {
-    // const file_zone = tracy.initZone(@src(), .{ .name = "Load canvas from file" });
-    // defer file_zone.deinit();
     var file = try dir.openFile(file_path, .{});
     defer file.close();
 
@@ -399,10 +382,6 @@ fn updateAndRender(self: *Drawer) !void {
     }
     const cursor_position: Vec2 = @bitCast(rl.getMousePosition());
     if (maybe_canvas) |canvas| {
-        // tracy.plot(i64, "history size", @intCast(canvas.history.events.items.len));
-        // tracy.plot(i64, "strokes size", @intCast(canvas.strokes.items.len));
-        // tracy.plot(i64, "segments size", @intCast(canvas.segments.items.len));
-
         const world_position: Vec2 = @bitCast(rl.getScreenToWorld2D(rl.getMousePosition(), canvas.camera));
         defer self.old_world_position = world_position;
         defer self.old_cursor_position = cursor_position;
@@ -431,9 +410,6 @@ fn updateAndRender(self: *Drawer) !void {
             // rl.loadRenderTexture();
             canvas.camera.begin();
             defer canvas.camera.end();
-            // const zone = tracy.initZone(@src(), .{ .name = "Line drawing" });
-            // defer zone.deinit();
-
             drawCanvas(canvas);
         }
 
@@ -504,8 +480,6 @@ fn updateAndRender(self: *Drawer) !void {
 
         // Draw grid
         if (self.draw_grid) {
-            // const zone = tracy.initZone(@src(), .{ .name = "Draw grid" });
-            // defer zone.deinit();
             for (0..8) |i| {
                 drawGridScale(canvas.camera, std.math.pow(f32, 10, @floatFromInt(i)));
             }
@@ -631,9 +605,6 @@ fn updateAndRender(self: *Drawer) !void {
         }
         rl.drawFPS(0, 0);
     }
-
-    // const zone = tracy.initZone(@src(), .{ .name = "End drawing" });
-    // defer zone.deinit();
 
     rl.endDrawing();
 }
@@ -857,7 +828,6 @@ fn drawCanvas(canvas: *Canvas) void {
             }
         }
     }
-    // tracy.plot(u32, "Strokes drawn", counter);
 }
 
 fn clampCameraPosition(camera: *rl.Camera2D, board_padding: f32) void {

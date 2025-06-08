@@ -5,10 +5,8 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const no_bin = b.option(bool, "no-bin", "Don't emit binary file") orelse false;
-    // const tracy_enable = b.option(bool, "tracy_enable", "Enable profiling") orelse false;
 
     const options = b.addOptions();
-    // options.addOption(bool, "tracy_enable", tracy_enable);
 
     const raylib_dep = b.dependency("raylib-zig", .{
         .target = target,

@@ -3,7 +3,6 @@
 const std = @import("std");
 
 const rl = @import("raylib");
-// const tracy = @import("tracy");
 
 const HistoryStorage = @import("history.zig").History;
 const main = @import("main.zig");
@@ -36,14 +35,12 @@ const EventTypes = union(enum) {
     erased: usize,
 
     pub fn redo(event: EventTypes, canvas: *Canvas) void {
-        // tracy.message("redo");
         switch (event) {
             .drawn => |index| canvas.strokes.items[index].is_active = true,
             .erased => |index| canvas.strokes.items[index].is_active = false,
         }
     }
     pub fn undo(event: EventTypes, canvas: *Canvas) void {
-        // tracy.message("undo");
         switch (event) {
             .erased => |index| canvas.strokes.items[index].is_active = true,
             .drawn => |index| canvas.strokes.items[index].is_active = false,
@@ -185,9 +182,6 @@ pub fn erase(canvas: *@This(), gpa: std.mem.Allocator, start: Vector2, end: Vect
 }
 
 pub fn save(canvas: *Canvas, writer: anytype) !void {
-    // const zone = tracy.initZone(@src(), .{});
-    // defer zone.deinit();
-
     try writer.writeAll(config.save_format_magic); // magic
     inline for (.{ "segments", "strokes" }) |field| {
         try writer.writeInt(u64, @field(canvas, field).items.len, .little);
