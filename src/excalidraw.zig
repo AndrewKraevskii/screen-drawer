@@ -110,6 +110,7 @@ pub fn @"export"(canvas: *const Canvas, writer: anytype) !void {
     }
 }
 
+/// Converts color to `#rrggbb` style string.
 fn colorToHex(color: @FieldType(Canvas.Stroke, "color")) [7]u8 {
     var result: [7]u8 = undefined;
     _ = std.fmt.bufPrint(&result, "#{x:0>2}{x:0>2}{x:0>2}", .{

@@ -47,6 +47,7 @@ start_position: ?Vec2,
 selection: std.ArrayListUnmanaged(u64),
 
 save_directory: std.fs.Dir,
+random: std.Random.DefaultPrng,
 
 const Canvases = std.StringArrayHashMapUnmanaged(Canvas);
 
@@ -111,9 +112,10 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
         while (try iter.next()) |entry| {
             if (entry.kind != .file or
                 !std.mem.eql(u8, std.fs.path.extension(entry.name), "." ++ config.save_format_magic)) continue;
+            const name_without_extension = entry.name[0 .. entry.name.len - ("." ++ config.save_format_magic).len];
 
             const canvas = loadCanvas(gpa, dir, entry.name) catch continue;
-            try canvases.putNoClobber(gpa, try gpa.dupe(u8, entry.name), canvas);
+            try canvases.putNoClobber(gpa, try gpa.dupe(u8, name_without_extension), canvas);
         }
 
         break :canvases canvases;
@@ -129,6 +131,7 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
     } else &Canvas.init;
 
     const drawer: Drawer = .{
+        .random = .init(std.crypto.random.int(u64)),
         .start_position = null,
         .selection = .{},
         .target_zoom = canvas.camera.zoom,
@@ -152,7 +155,10 @@ pub fn getMouseDelta(self: *Drawer) rl.Vector2 {
 
 pub fn deinit(self: *Drawer) void {
     for (self.canvases.values(), self.canvases.keys()) |*canvas, name| {
-        saveCanvas(self.save_directory, name, canvas) catch |e| {
+        var name_with_extension_buffer: [std.fs.max_name_bytes]u8 = undefined;
+        const name_with_extension = std.fmt.bufPrint(&name_with_extension_buffer, "{s}.{s}", .{ name, config.save_format_magic }) catch unreachable;
+
+        saveCanvas(self.save_directory, name_with_extension, canvas) catch |e| {
             std.log.err("Failed to save: {s}", .{@errorName(e)});
         };
         canvas.deinit(self.gpa);
@@ -366,18 +372,16 @@ fn updateAndRender(self: *Drawer) !void {
             }
         }
         if (rl.isKeyPressed(.n)) {
-            const name = try generateName(self.gpa);
+            try self.canvases.ensureUnusedCapacity(self.gpa, 1);
+            const name = generateBase64String(11, self.random.random());
             std.log.info("Created new canvas: {s}", .{name});
 
-            try self.canvases.putNoClobber(
-                self.gpa,
-                name,
+            self.canvases.putAssumeCapacityNoClobber(
+                try self.gpa.dupe(u8, &name),
                 .init,
             );
-            maybe_canvas = if (self.selected_canvas) |selected_canvas|
-                &self.canvases.values()[selected_canvas]
-            else
-                null;
+            self.selected_canvas = self.canvases.count() - 1;
+            maybe_canvas = &self.canvases.values()[self.selected_canvas.?];
         }
     }
     const cursor_position: Vec2 = @bitCast(rl.getMousePosition());
@@ -609,15 +613,12 @@ fn updateAndRender(self: *Drawer) !void {
     rl.endDrawing();
 }
 
-fn generateName(alloc: std.mem.Allocator) error{OutOfMemory}![]const u8 {
-    var random: [8]u8 = undefined;
-    std.crypto.random.bytes(random[0..8]);
-    const name_size = comptime std.fs.base64_encoder.calcSize(random.len);
-    var name: [name_size + 4]u8 = undefined;
-    _ = std.fs.base64_encoder.encode(name[0..name_size], &random);
-    name[name_size..][0..4].* = ("." ++ main.config.save_format_magic).*;
-
-    return alloc.dupe(u8, &name);
+fn generateBase64String(comptime output_size: usize, random: std.Random) [output_size]u8 {
+    var output: [output_size]u8 = undefined;
+    for (&output) |*char| {
+        char.* = std.base64.url_safe_alphabet_chars[random.intRangeLessThan(usize, 0, 64)];
+    }
+    return output;
 }
 
 fn drawLabels(canvas: *Canvas) void {
