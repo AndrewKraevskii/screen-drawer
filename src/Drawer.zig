@@ -36,9 +36,7 @@ selected_canvas: ?usize,
 old_world_position: Vec2,
 old_cursor_position: Vec2,
 
-showing_keybindings: bool,
-draw_grid: bool,
-
+flags: Flags,
 background_color: rl.Color,
 background_alpha_selector: ?Bar,
 
@@ -49,6 +47,11 @@ selection: std.ArrayListUnmanaged(u64),
 
 save_directory: std.fs.Dir,
 random: std.Random.DefaultPrng,
+
+const Flags = struct {
+    showing_keybindings: bool,
+    draw_grid: bool,
+};
 
 const Canvases = std.StringArrayHashMapUnmanaged(Canvas);
 
@@ -109,8 +112,10 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
     const drawer: Drawer = .{
         .background_color = .blank,
         .background_alpha_selector = null,
-        .draw_grid = false,
-        .showing_keybindings = false,
+        .flags = .{
+            .draw_grid = false,
+            .showing_keybindings = false,
+        },
         .random = .init(std.crypto.random.int(u64)),
         .selection_start_position = null,
         .selection = .{},
@@ -132,7 +137,7 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
     return drawer;
 }
 
-pub fn getMouseDelta(self: *Drawer) rl.Vector2 {
+pub fn getMouseDelta(self: *const Drawer) rl.Vector2 {
     return @bitCast(@as(Vec2, @bitCast(rl.getMousePosition())) - self.old_cursor_position);
 }
 
@@ -151,6 +156,8 @@ pub fn deinit(self: *Drawer) void {
     self.canvases.deinit(self.gpa);
     self.selection.deinit(self.gpa);
     rl.closeWindow();
+
+    self.* = undefined;
 }
 
 fn drawKeybindingsHelp(arena: std.mem.Allocator, position: Vec2) !void {
@@ -288,48 +295,48 @@ fn loadCanvas(alloc: std.mem.Allocator, dir: std.fs.Dir, file_path: []const u8) 
     };
 }
 
-fn updateAndRender(self: *Drawer) !void {
-    var maybe_canvas: ?*Canvas = if (self.selected_canvas) |selected_canvas|
-        &self.canvases.values()[selected_canvas]
+fn updateAndRender(drawer: *Drawer) !void {
+    var maybe_canvas: ?*Canvas = if (drawer.selected_canvas) |selected_canvas|
+        &drawer.canvases.values()[selected_canvas]
     else
         null;
 
-    var arena = std.heap.ArenaAllocator.init(self.gpa);
+    var arena = std.heap.ArenaAllocator.init(drawer.gpa);
     defer arena.deinit();
 
     rl.beginDrawing();
-    rl.clearBackground(self.background_color);
+    rl.clearBackground(drawer.background_color);
 
     // global input
     {
         const key_bindings = config.key_bindings;
 
         if (input.isPressed(key_bindings.toggle_keybindings)) {
-            self.showing_keybindings = !self.showing_keybindings;
+            drawer.flags.showing_keybindings = !drawer.flags.showing_keybindings;
         } else if (input.isPressed(key_bindings.grid)) {
-            self.draw_grid = !self.draw_grid;
+            drawer.flags.draw_grid = !drawer.flags.draw_grid;
         } else if (input.isPressed(key_bindings.reset_canvas)) {
             if (maybe_canvas) |canvas| {
-                self.selection.clearRetainingCapacity();
-                canvas.deinit(self.gpa);
+                drawer.selection.clearRetainingCapacity();
+                canvas.deinit(drawer.gpa);
                 canvas.* = .init;
                 canvas.camera.offset = .init(
                     @floatFromInt(@divFloor(rl.getScreenWidth(), 2)),
                     @floatFromInt(@divFloor(rl.getScreenHeight(), 2)),
                 );
-                self.target_zoom = canvas.camera.zoom;
+                drawer.target_zoom = canvas.camera.zoom;
                 std.debug.print("{any}\n", .{canvas});
             }
         } else if (input.isPressed(key_bindings.save)) {
-            if (self.selected_canvas) |canvas_index|
+            if (drawer.selected_canvas) |canvas_index|
                 try saveCanvas(
-                    self.save_directory,
-                    self.canvases.keys()[canvas_index],
-                    &self.canvases.values()[canvas_index],
+                    drawer.save_directory,
+                    drawer.canvases.keys()[canvas_index],
+                    &drawer.canvases.values()[canvas_index],
                 );
             std.log.info("Saved image", .{});
         } else if (input.isPressed(key_bindings.@"export")) {
-            if (self.selected_canvas) |canvas_index| {
+            if (drawer.selected_canvas) |canvas_index| {
                 const file = try std.fs.cwd().createFile("exported.excalidraw", .{});
                 defer file.close();
 
@@ -337,7 +344,7 @@ fn updateAndRender(self: *Drawer) !void {
                 defer buffered.flush() catch {};
 
                 try @import("excalidraw.zig").@"export"(
-                    &self.canvases.values()[canvas_index],
+                    &drawer.canvases.values()[canvas_index],
                     buffered.writer(),
                 );
             }
@@ -355,26 +362,26 @@ fn updateAndRender(self: *Drawer) !void {
             }
         }
         if (rl.isKeyPressed(.n)) {
-            try self.canvases.ensureUnusedCapacity(self.gpa, 1);
-            const name = generateBase64String(11, self.random.random());
+            try drawer.canvases.ensureUnusedCapacity(drawer.gpa, 1);
+            const name = generateBase64String(11, drawer.random.random());
             std.log.info("Created new canvas: {s}", .{name});
 
-            self.canvases.putAssumeCapacityNoClobber(
-                try self.gpa.dupe(u8, &name),
+            drawer.canvases.putAssumeCapacityNoClobber(
+                try drawer.gpa.dupe(u8, &name),
                 .init,
             );
-            self.selected_canvas = self.canvases.count() - 1;
-            maybe_canvas = &self.canvases.values()[self.selected_canvas.?];
+            drawer.selected_canvas = drawer.canvases.count() - 1;
+            maybe_canvas = &drawer.canvases.values()[drawer.selected_canvas.?];
         }
     }
     const cursor_position: Vec2 = @bitCast(rl.getMousePosition());
     if (maybe_canvas) |canvas| {
         const world_position: Vec2 = @bitCast(rl.getScreenToWorld2D(rl.getMousePosition(), canvas.camera));
-        defer self.old_world_position = world_position;
-        defer self.old_cursor_position = cursor_position;
+        defer drawer.old_world_position = world_position;
+        defer drawer.old_cursor_position = cursor_position;
         {
             if (input.isDown(config.key_bindings.drag)) {
-                canvas.camera.target = canvas.camera.target.subtract(self.getMouseDelta().scale(1 / canvas.camera.zoom));
+                canvas.camera.target = canvas.camera.target.subtract(drawer.getMouseDelta().scale(1 / canvas.camera.zoom));
             }
             // move camera zoom
             const board_padding = 100000000;
@@ -385,10 +392,10 @@ fn updateAndRender(self: *Drawer) !void {
             const min_zoom = 1.0 / 10000.0;
             const max_zoom = 0.07;
 
-            self.target_zoom *= @exp(rl.getMouseWheelMoveV().y);
-            self.target_zoom = std.math.clamp(self.target_zoom, min_zoom, max_zoom);
-            const new_zoom = math.expDecayWithAnimationSpeed(canvas.camera.zoom, self.target_zoom, rl.getFrameTime());
-            canvas.camera.target = canvas.camera.target.subtract(self.getMouseDelta().scale(-1 / canvas.camera.zoom));
+            drawer.target_zoom *= @exp(rl.getMouseWheelMoveV().y);
+            drawer.target_zoom = std.math.clamp(drawer.target_zoom, min_zoom, max_zoom);
+            const new_zoom = math.expDecayWithAnimationSpeed(canvas.camera.zoom, drawer.target_zoom, rl.getFrameTime());
+            canvas.camera.target = canvas.camera.target.subtract(drawer.getMouseDelta().scale(-1 / canvas.camera.zoom));
             canvas.camera.offset = rl.getMousePosition();
             canvas.camera.zoom = new_zoom;
         }
@@ -400,23 +407,23 @@ fn updateAndRender(self: *Drawer) !void {
             drawCanvas(canvas);
         }
 
-        self.brush_state = switch (self.brush_state) {
+        drawer.brush_state = switch (drawer.brush_state) {
             .idle => if (input.isDown(config.key_bindings.select)) state: {
-                self.selection_start_position = @as(Vec2, @bitCast(rl.getMousePosition()));
+                drawer.selection_start_position = @as(Vec2, @bitCast(rl.getMousePosition()));
                 break :state .selecting;
             } else if (input.isDown(config.key_bindings.eraser))
                 .eraser
             else if (input.isPressed(config.key_bindings.picking_color)) state: {
-                self.color_wheel = .{ .center = cursor_position, .size = 0 };
+                drawer.color_wheel = .{ .center = cursor_position, .size = 0 };
                 break :state .picking_color;
             } else if (input.isDown(config.key_bindings.draw)) state: {
-                try canvas.startStroke(self.gpa, self.brush.color, config.line_thickness / canvas.camera.zoom);
+                try canvas.startStroke(drawer.gpa, drawer.brush.color, config.line_thickness / canvas.camera.zoom);
                 break :state .drawing;
             } else .idle,
 
             .drawing => state: {
                 try canvas.addStrokePoint(
-                    self.gpa,
+                    drawer.gpa,
                     @bitCast(world_position),
                     canvas.camera.zoom,
                 );
@@ -429,19 +436,19 @@ fn updateAndRender(self: *Drawer) !void {
                 const radius = config.eraser_thickness / 2;
                 std.log.debug("eraser strokes {d}", .{canvas.strokes.items.len});
                 std.log.debug("eraser segments {d}", .{canvas.segments.items.len});
-                try canvas.erase(self.gpa, self.old_world_position, world_position, radius);
+                try canvas.erase(drawer.gpa, drawer.old_world_position, world_position, radius);
                 std.log.debug("eraser strokes {d}", .{canvas.strokes.items.len});
                 std.log.debug("eraser segments {d}", .{canvas.segments.items.len});
 
                 break :state if (input.isDown(config.key_bindings.eraser)) .eraser else .idle;
             },
             .picking_color => state: {
-                self.brush.color = self.color_wheel.draw(cursor_position);
+                drawer.brush.color = drawer.color_wheel.draw(cursor_position);
                 break :state if (!input.isDown(config.key_bindings.picking_color))
                     .idle
                 else {
-                    self.color_wheel.size = math.expDecayWithAnimationSpeed(
-                        self.color_wheel.size,
+                    drawer.color_wheel.size = math.expDecayWithAnimationSpeed(
+                        drawer.color_wheel.size,
                         config.color_wheel_size,
                         rl.getFrameTime(),
                     );
@@ -454,7 +461,7 @@ fn updateAndRender(self: *Drawer) !void {
                 break :blk .selected;
             },
             .selected => if (input.isPressed(config.key_bindings.drag)) blk: {
-                self.selection.clearRetainingCapacity();
+                drawer.selection.clearRetainingCapacity();
                 break :blk .idle;
             } else .selected,
         };
@@ -466,22 +473,22 @@ fn updateAndRender(self: *Drawer) !void {
             });
 
         // Draw grid
-        if (self.draw_grid) {
+        if (drawer.flags.draw_grid) {
             for (0..8) |i| {
                 drawGridScale(canvas.camera, std.math.pow(f32, 10, @floatFromInt(i)));
             }
         }
 
         // Shrink and draw color picker
-        if (self.brush_state != .picking_color) {
-            self.color_wheel.size = math.expDecayWithAnimationSpeed(self.color_wheel.size, 0, rl.getFrameTime());
-            _ = self.color_wheel.draw(cursor_position);
+        if (drawer.brush_state != .picking_color) {
+            drawer.color_wheel.size = math.expDecayWithAnimationSpeed(drawer.color_wheel.size, 0, rl.getFrameTime());
+            _ = drawer.color_wheel.draw(cursor_position);
         }
 
         // Draw selection
-        if (self.brush_state == .selecting) draw_selection: {
+        if (drawer.brush_state == .selecting) draw_selection: {
             std.log.debug("Selection", .{});
-            const start = self.selection_start_position orelse break :draw_selection;
+            const start = drawer.selection_start_position orelse break :draw_selection;
             const selection_rect: Rectangle = .fromPoints(start, @bitCast(rl.getMousePosition()));
             const selection_rect_world = selection_rect.toWorld(canvas.camera);
             rl.drawRectangleLinesEx(selection_rect.toRay(), 3, .gray);
@@ -489,7 +496,7 @@ fn updateAndRender(self: *Drawer) !void {
             canvas.camera.begin();
             defer canvas.camera.end();
 
-            self.selection.clearRetainingCapacity();
+            drawer.selection.clearRetainingCapacity();
             var mega_bounding_box: ?Canvas.BoundingBox = null;
             for (canvas.strokes.items, 0..) |stroke, index| {
                 if (!stroke.is_active) continue;
@@ -507,7 +514,7 @@ fn updateAndRender(self: *Drawer) !void {
                         mega_bounding_box = bounding_box.merge(mega_bounding_box);
                         rl.drawRectangleLinesEx(collision, config.line_thickness / 2 / canvas.camera.zoom, .red);
                         rl.drawRectangleLinesEx(ray_rect, config.line_thickness / 2 / canvas.camera.zoom, .blue);
-                        try self.selection.append(self.gpa, index);
+                        try drawer.selection.append(drawer.gpa, index);
                     }
                 }
             }
@@ -520,13 +527,13 @@ fn updateAndRender(self: *Drawer) !void {
                 };
                 rl.drawRectangleLinesEx(rect, config.line_thickness / 2 / canvas.camera.zoom, .gray);
             }
-        } else if (self.brush_state == .selected) {
+        } else if (drawer.brush_state == .selected) {
             canvas.camera.begin();
             defer canvas.camera.end();
 
             var mega_bounding_box: ?Canvas.BoundingBox = null;
-            const diff: Vec2 = @bitCast(self.getMouseDelta());
-            for (self.selection.items) |selection_index| {
+            const diff: Vec2 = @bitCast(drawer.getMouseDelta());
+            for (drawer.selection.items) |selection_index| {
                 std.log.debug("strokes {d}", .{canvas.strokes.items.len});
                 std.log.debug("segments {d}", .{canvas.segments.items.len});
                 const stroke = canvas.strokes.items[selection_index];
@@ -559,23 +566,23 @@ fn updateAndRender(self: *Drawer) !void {
     }
 
     // Draw mouse
-    if (self.brush_state == .eraser) {
-        rl.drawCircleLinesV(@bitCast(cursor_position), config.eraser_thickness / 2, self.brush.color);
+    if (drawer.brush_state == .eraser) {
+        rl.drawCircleLinesV(@bitCast(cursor_position), config.eraser_thickness / 2, drawer.brush.color);
     } else {
-        rl.drawCircleV(@bitCast(cursor_position), self.brush.radius * 2, self.brush.color);
+        rl.drawCircleV(@bitCast(cursor_position), drawer.brush.radius * 2, drawer.brush.color);
     }
 
     if (input.isDown(config.key_bindings.change_brightness)) {
-        if (self.background_alpha_selector) |bar| {
-            self.background_color = self.background_color.alpha(bar.draw(cursor_position));
+        if (drawer.background_alpha_selector) |bar| {
+            drawer.background_color = drawer.background_color.alpha(bar.draw(cursor_position));
         } else {
-            self.background_alpha_selector = Bar.init(cursor_position, self.background_color.normalize().w, .{ .text = "Background alpha" });
+            drawer.background_alpha_selector = Bar.init(cursor_position, drawer.background_color.normalize().w, .{ .text = "Background alpha" });
         }
     } else {
-        self.background_alpha_selector = null;
+        drawer.background_alpha_selector = null;
     }
 
-    if (self.showing_keybindings) {
+    if (drawer.flags.showing_keybindings) {
         try drawKeybindingsHelp(arena.allocator(), .{ 100, 100 });
     }
 
@@ -588,7 +595,7 @@ fn updateAndRender(self: *Drawer) !void {
             layout.drawText("zoom level: {d}", .{@log(canvas.camera.zoom)});
             layout.drawText("zoom level: {d}", .{1 / canvas.camera.zoom});
             layout.drawText("position: {d}x,{d}y", .{ canvas.camera.target.x, canvas.camera.target.y });
-            layout.drawText("canvas name {s}", .{self.canvases.keys()[self.selected_canvas.?]});
+            layout.drawText("canvas name {s}", .{drawer.canvases.keys()[drawer.selected_canvas.?]});
         }
         rl.drawFPS(0, 0);
     }
@@ -688,14 +695,14 @@ const Bar = struct {
         };
     }
 
-    fn draw(self: @This(), cursor_pos: Vec2) f32 {
-        const dir_vec: Vec2 = if (self.orientation == .vertical)
-            .{ 0, self.scale / 2 }
+    fn draw(bar: @This(), cursor_pos: Vec2) f32 {
+        const dir_vec: Vec2 = if (bar.orientation == .vertical)
+            .{ 0, bar.scale / 2 }
         else
-            .{ self.scale / 2, 0 };
+            .{ bar.scale / 2, 0 };
 
-        const bar_start = self.center + dir_vec;
-        const bar_end = self.center - dir_vec;
+        const bar_start = bar.center + dir_vec;
+        const bar_end = bar.center - dir_vec;
         const bar_width = 10;
         rl.drawLineEx(
             @bitCast(bar_start),
@@ -705,27 +712,27 @@ const Bar = struct {
         );
         const bar_size = 10;
         const clamped = std.math.clamp(cursor_pos, bar_end, bar_start);
-        const bar_middle_pos: Vec2 = if (self.orientation == .vertical)
-            .{ self.center[0], clamped[1] }
+        const bar_middle_pos: Vec2 = if (bar.orientation == .vertical)
+            .{ bar.center[0], clamped[1] }
         else
-            .{ clamped[0], self.center[1] };
+            .{ clamped[0], bar.center[1] };
 
         const font_size = 30;
-        const text_width = rl.measureText(self.text, font_size);
-        const bar_vec: Vec2 = if (self.orientation == .vertical) .{ 0, bar_size / 2 } else .{ bar_size / 2, 0 };
-        if (self.orientation == .vertical)
+        const text_width = rl.measureText(bar.text, font_size);
+        const bar_vec: Vec2 = if (bar.orientation == .vertical) .{ 0, bar_size / 2 } else .{ bar_size / 2, 0 };
+        if (bar.orientation == .vertical)
             rl.drawText(
-                self.text,
-                @as(i32, @intFromFloat(self.center[0])) - text_width - bar_width,
-                @as(i32, @intFromFloat(self.center[1])) - font_size / 2,
+                bar.text,
+                @as(i32, @intFromFloat(bar.center[0])) - text_width - bar_width,
+                @as(i32, @intFromFloat(bar.center[1])) - font_size / 2,
                 font_size,
                 .white,
             )
         else
             rl.drawText(
-                self.text,
-                @as(i32, @intFromFloat(self.center[0])) - @divFloor(text_width, 2),
-                @as(i32, @intFromFloat(self.center[1])) - font_size - bar_width,
+                bar.text,
+                @as(i32, @intFromFloat(bar.center[0])) - @divFloor(text_width, 2),
+                @as(i32, @intFromFloat(bar.center[1])) - font_size - bar_width,
                 font_size,
                 .white,
             );
@@ -736,13 +743,13 @@ const Bar = struct {
             .red,
         );
 
-        const scaled = (bar_start - bar_middle_pos) / @as(Vec2, @splat(self.scale));
-        const selected_value = if (self.orientation == .vertical)
+        const scaled = (bar_start - bar_middle_pos) / @as(Vec2, @splat(bar.scale));
+        const selected_value = if (bar.orientation == .vertical)
             scaled[1]
         else
             scaled[0];
 
-        return selected_value * (self.max - self.min) + self.min;
+        return selected_value * (bar.max - bar.min) + bar.min;
     }
 };
 
