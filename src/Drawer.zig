@@ -8,7 +8,7 @@ const is_debug = @import("main.zig").is_debug;
 const main = @import("main.zig");
 const config = main.config;
 const Vec2 = main.Vector2;
-const math = @import("math.zig");
+const animation = @import("animation.zig");
 const Rectangle = @import("Rectangle.zig");
 const UILayout = @import("UILayout.zig");
 
@@ -67,6 +67,8 @@ pub fn init(gpa: std.mem.Allocator) !Drawer {
     rl.setTraceLogLevel(if (is_debug) .debug else .warning);
 
     rl.initWindow(0, 0, config.app_name);
+    rl.enableEventWaiting();
+
     errdefer rl.closeWindow();
 
     const dir_path = try getAppDataDirEnsurePathExist(gpa, config.save_folder_name);
@@ -142,6 +144,7 @@ pub fn getMouseDelta(self: *const Drawer) rl.Vector2 {
 }
 
 pub fn deinit(self: *Drawer) void {
+    rl.disableEventWaiting();
     for (self.canvases.values(), self.canvases.keys()) |*canvas, name| {
         var name_with_extension_buffer: [std.fs.max_name_bytes]u8 = undefined;
         const name_with_extension = std.fmt.bufPrint(&name_with_extension_buffer, "{s}.{s}", .{ name, config.save_format_magic }) catch unreachable;
@@ -307,6 +310,7 @@ fn updateAndRender(drawer: *Drawer) !void {
     rl.beginDrawing();
     rl.clearBackground(drawer.background_color);
 
+    var animation_playing = false;
     // global input
     {
         const key_bindings = config.key_bindings;
@@ -394,7 +398,7 @@ fn updateAndRender(drawer: *Drawer) !void {
 
             drawer.target_zoom *= @exp(rl.getMouseWheelMoveV().y);
             drawer.target_zoom = std.math.clamp(drawer.target_zoom, min_zoom, max_zoom);
-            const new_zoom = math.expDecayWithAnimationSpeed(canvas.camera.zoom, drawer.target_zoom, rl.getFrameTime());
+            const new_zoom = animation.expDecayWithAnimationSpeed(canvas.camera.zoom, drawer.target_zoom, rl.getFrameTime(), &animation_playing);
             canvas.camera.target = canvas.camera.target.subtract(drawer.getMouseDelta().scale(-1 / canvas.camera.zoom));
             canvas.camera.offset = rl.getMousePosition();
             canvas.camera.zoom = new_zoom;
@@ -447,10 +451,11 @@ fn updateAndRender(drawer: *Drawer) !void {
                 break :state if (!input.isDown(config.key_bindings.picking_color))
                     .idle
                 else {
-                    drawer.color_wheel.size = math.expDecayWithAnimationSpeed(
+                    drawer.color_wheel.size = animation.expDecayWithAnimationSpeed(
                         drawer.color_wheel.size,
                         config.color_wheel_size,
                         rl.getFrameTime(),
+                        &animation_playing,
                     );
                     break :state .picking_color;
                 };
@@ -481,7 +486,7 @@ fn updateAndRender(drawer: *Drawer) !void {
 
         // Shrink and draw color picker
         if (drawer.brush_state != .picking_color) {
-            drawer.color_wheel.size = math.expDecayWithAnimationSpeed(drawer.color_wheel.size, 0, rl.getFrameTime());
+            drawer.color_wheel.size = animation.expDecayWithAnimationSpeed(drawer.color_wheel.size, 0, rl.getFrameTime(), &animation_playing);
             _ = drawer.color_wheel.draw(cursor_position);
         }
 
@@ -598,6 +603,12 @@ fn updateAndRender(drawer: *Drawer) !void {
             layout.drawText("canvas name {s}", .{drawer.canvases.keys()[drawer.selected_canvas.?]});
         }
         rl.drawFPS(0, 0);
+    }
+
+    if (animation_playing) {
+        rl.disableEventWaiting();
+    } else {
+        rl.enableEventWaiting();
     }
 
     rl.endDrawing();
